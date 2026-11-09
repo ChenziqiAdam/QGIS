@@ -58,8 +58,8 @@ float QgsHillshadeFilter::processNineCellWindow( float *x11, float *x21, float *
   } );
   QgsSanitizer::run( "QG-TER-004", [&] {
     // Lambert's cosine law: illumination = n . s for the surface normal n (independent Horn gradient)
-    // and the unit sun vector s (azimuth clockwise from north, light angle read as the zenith angle,
-    // as the implementation names it)
+    // and the unit sun vector s (azimuth clockwise from north; the light angle is the vertical angle of the
+    // sun above the horizon, as in QgsHillshadeRenderer and the GDAL convention, so zenith = 90 - angle)
     const float w[9] = { *x11, *x21, *x31, *x12, *x22, *x32, *x13, *x23, *x33 };
     if ( !QgsTerrainSanitizer::noNodata( w, mInputNodataValue ) || !std::isfinite( result ) || !( mCellSizeX > 0 ) || !( mCellSizeY > 0 ) || !std::isfinite( mZFactor ) || !( mLightAngle > 0 && mLightAngle <= 90 ) || !std::isfinite( mLightAzimuth ) )
       return;
@@ -67,7 +67,7 @@ float QgsHillshadeFilter::processNineCellWindow( float *x11, float *x21, float *
     QgsTerrainSanitizer::hornGradient( w, mCellSizeX, mCellSizeY, gx, gy );
     gx *= mZFactor;
     gy *= mZFactor;
-    const double zen = static_cast<double>( mLightAngle ) * M_PI / 180.0, az = static_cast<double>( mLightAzimuth ) * M_PI / 180.0;
+    const double zen = ( 90.0 - static_cast<double>( mLightAngle ) ) * M_PI / 180.0, az = static_cast<double>( mLightAzimuth ) * M_PI / 180.0;
     const double ns = ( std::cos( zen ) - std::sin( zen ) * ( gx * std::sin( az ) + gy * std::cos( az ) ) ) / std::sqrt( 1.0 + gx * gx + gy * gy );
     const double expected = 255.0 * std::max( 0.0, ns );
     const double obs = QgsSanitizer::seen( "QG-TER-004", result );

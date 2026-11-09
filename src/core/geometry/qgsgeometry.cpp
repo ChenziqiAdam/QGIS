@@ -2716,6 +2716,12 @@ QgsGeometry QgsGeometry::buffer( double distance, int segments, QgsFeedback *fee
   QgsSanitizer::run( "QG-GEO-006", [&] {
     if ( !( distance > 0 ) || !std::isfinite( distance ) || segments < 8 || type() != Qgis::GeometryType::Polygon || out.isNull() || out.isEmpty() || !isGeosValid() )
       return;
+    // distance must be resolvable against the extent and the coordinate rounding (GEOS returns an empty buffer for a vanishing distance)
+    const QgsRectangle ext = boundingBox();
+    const double extent = std::max( ext.width(), ext.height() );
+    const double coordMax = std::max( { std::fabs( ext.xMinimum() ), std::fabs( ext.xMaximum() ), std::fabs( ext.yMinimum() ), std::fabs( ext.yMaximum() ) } );
+    if ( !( distance >= 1e-9 * extent ) || !( distance >= 1e6 * QgsSanitizer::EPS * coordMax ) )
+      return;
     const double src = area();
     const double a1 = out.area() * ( QgsSanitizer::fault( "QG-GEO-006" ) ? 1e3 : 1.0 );
     const QgsGeometry wider = buffer( 2 * distance, segments, feedback );
@@ -2968,11 +2974,17 @@ QgsGeometry QgsGeometry::centroid() const
     if ( !mp || mp->numGeometries() < 2 || mp->numGeometries() > 20 || result.isNull() || result.isEmpty() || QgsWkbTypes::flatType( result.wkbType() ) != Qgis::WkbType::Point )
       return;
     std::vector<QgsGeometry> parts;
+    double minPartArea = std::numeric_limits<double>::max();
     for ( int i = 0; i < mp->numGeometries(); ++i )
     {
       QgsGeometry g( mp->geometryN( i )->clone() );
       if ( !g.isGeosValid() || !( g.area() > 0 ) )
         return;
+      // conditioning: parts must not be slivers relative to their bounding box (centroid rounding scales with extent^2 / area)
+      const QgsRectangle pb = g.boundingBox();
+      if ( !( g.area() >= 1e-2 * pb.width() * pb.height() ) )
+        return;
+      minPartArea = std::min( minPartArea, g.area() );
       parts.push_back( g );
     }
     for ( size_t i = 0; i < parts.size(); ++i )
@@ -2997,7 +3009,8 @@ QgsGeometry QgsGeometry::centroid() const
     const double ox = QgsSanitizer::seen( "QG-GEO-004", obs.x() );
     const QgsRectangle bb = d->geometry->boundingBox();
     const double extent = std::max( bb.width(), bb.height() );
-    const double tol = 1e-9 * extent + 64 * QgsSanitizer::EPS * ( std::fabs( cx ) + std::fabs( cy ) + extent );
+    const double coordMax = std::max( { std::fabs( bb.xMinimum() ), std::fabs( bb.xMaximum() ), std::fabs( bb.yMinimum() ), std::fabs( bb.yMaximum() ) } );
+    const double tol = 1e-9 * extent + 64 * QgsSanitizer::EPS * ( std::fabs( cx ) + std::fabs( cy ) + extent + coordMax * extent * extent / minPartArea );
     QgsSanitizer::check( "QG-GEO-004", std::hypot( ox - cx, obs.y() - cy ) > tol, "centroid (" + QgsSanitizer::num( ox ) + "," + QgsSanitizer::num( obs.y() ) + ") vs area-weighted (" + QgsSanitizer::num( cx ) + "," + QgsSanitizer::num( cy ) + ")" );
   } );
   return result;

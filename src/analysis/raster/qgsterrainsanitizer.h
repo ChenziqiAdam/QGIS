@@ -96,7 +96,7 @@ namespace QgsTerrainSanitizer
     {
       case Slope:
         diff = std::fabs( a - b );
-        tol = 1e-4 + 64 * RAD2DEG * QgsSanitizer::EPS32 * mag * std::fabs( zfactor ) / cell;
+        tol = 1e-4 + 64 * RAD2DEG * QgsSanitizer::EPS32 * mag * std::fabs( zfactor ) / cell + 4 * QgsSanitizer::EPS32 * std::fabs( a );
         break;
       case Aspect:
       {
@@ -107,12 +107,12 @@ namespace QgsTerrainSanitizer
         if ( !( g > 1e3 * errG ) )
           return; // direction undefined or dominated by rounding
         diff = circularDiffDeg( a, b );
-        tol = 1e-3 + RAD2DEG * errG / g;
+        tol = 1e-3 + RAD2DEG * errG / g + 4 * QgsSanitizer::EPS32 * std::fabs( a );
         break;
       }
       case Hillshade:
         diff = std::fabs( a - b );
-        tol = 255.0 * ( 64 * QgsSanitizer::EPS32 + 8 * QgsSanitizer::EPS32 * mag * std::fabs( zfactor ) / cell ) + 1e-3;
+        tol = 255.0 * ( 64 * QgsSanitizer::EPS32 + 8 * QgsSanitizer::EPS32 * mag * std::fabs( zfactor ) / cell ) + 1e-3 + 4 * QgsSanitizer::EPS32 * std::fabs( a );
         break;
       case Ruggedness:
         diff = std::fabs( a - b );

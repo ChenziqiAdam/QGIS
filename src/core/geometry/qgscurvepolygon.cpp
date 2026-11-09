@@ -500,7 +500,7 @@ double QgsCurvePolygon::area() const
         return;
     }
     for ( int i = 0; i < n; ++i )
-      terms += std::fabs( xs[i] * ys[( i + 1 ) % n] - xs[( i + 1 ) % n] * ys[i] );
+      terms += std::fabs( xs[i] * ys[( i + 1 ) % n] - xs[( i + 1 ) % n] * ys[i] ) + std::fabs( xs[i] ) * std::fabs( ys[( i + 1 ) % n] - ys[i] ) + std::fabs( ys[i] ) * std::fabs( xs[( i + 1 ) % n] - xs[i] );
     double exterior = 0;
     mExteriorRing->sumUpArea( exterior );
     exterior = QgsSanitizer::seen( "QG-GEO-003", std::fabs( exterior ) );
@@ -527,7 +527,11 @@ double QgsCurvePolygon::area() const
     if ( !( p > 0 ) || !std::isfinite( p ) || !std::isfinite( totalArea ) )
       return;
     const double a = QgsSanitizer::seen( "QG-GEO-005", totalArea );
-    QgsSanitizer::check( "QG-GEO-005", a > p * p / ( 4.0 * M_PI ) * ( 1 + 1e-9 ), "area " + QgsSanitizer::num( a ) + " exceeds P^2/4pi with P=" + QgsSanitizer::num( p ) );
+    // slack: area and perimeter carry coordinate rounding eps |coordinate| per vertex (random walk over the vertices)
+    const QgsRectangle eb = mExteriorRing->boundingBox();
+    const double coordMax = std::max( { std::fabs( eb.xMinimum() ), std::fabs( eb.xMaximum() ), std::fabs( eb.yMinimum() ), std::fabs( eb.yMaximum() ) } );
+    const double slack = 64 * QgsSanitizer::EPS * std::sqrt( static_cast<double>( mExteriorRing->numPoints() ) ) * coordMax * p;
+    QgsSanitizer::check( "QG-GEO-005", a > p * p / ( 4.0 * M_PI ) * ( 1 + 1e-9 ) + slack, "area " + QgsSanitizer::num( a ) + " exceeds P^2/4pi with P=" + QgsSanitizer::num( p ) );
   } );
   return totalArea;
 }

@@ -1003,14 +1003,15 @@ QgsRectangle QgsCoordinateTransform::transformBoundingBox( const QgsRectangle &r
       return; // antimeridian-crossing result
     const bool destGeographic = direction == Qgis::TransformDirection::Forward ? d->mDestCRS.isGeographic() : d->mSourceCRS.isGeographic();
     const bool srcGeographic = direction == Qgis::TransformDirection::Forward ? d->mSourceCRS.isGeographic() : d->mDestCRS.isGeographic();
-    if ( destGeographic && out.width() > 180 )
-      return; // wrap-around risk
+    if ( destGeographic && ( out.width() > 90 || std::fabs( out.yMinimum() ) >= 85 || std::fabs( out.yMaximum() ) >= 85 ) )
+      return; // wrap-around risk (antimeridian, poles)
     if ( srcGeographic && ( std::fabs( rect.yMinimum() ) >= 89 || std::fabs( rect.yMaximum() ) >= 89 || rect.width() >= 180 ) )
       return;
     const double xs[3] = { rect.xMinimum(), 0.5 * ( rect.xMinimum() + rect.xMaximum() ), rect.xMaximum() };
     const double ys[3] = { rect.yMinimum(), 0.5 * ( rect.yMinimum() + rect.yMaximum() ), rect.yMaximum() };
     const double size = std::max( out.width(), out.height() );
-    const double tol = 1e-9 * size;
+    // the box is built from sampled boundary points: an edge may bulge between samples by O(spacing^2 curvature), here a fraction of the box
+    const double tol = 1e-3 * size;
     for ( int i = 0; i < 3; ++i )
       for ( int j = 0; j < 3; ++j )
       {

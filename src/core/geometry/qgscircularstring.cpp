@@ -356,7 +356,7 @@ double QgsCircularString::length() const
   QgsSanitizer::run( "QG-GEO-002", [&] {
     if ( nPoints < 3 || !std::isfinite( length ) )
       return;
-    double rMin = std::numeric_limits<double>::max(), coordMax = 0;
+    double rMin = std::numeric_limits<double>::max(), coordMax = 0, thetaMin = std::numeric_limits<double>::max();
     for ( int i = 0; i < ( nPoints - 2 ); i += 2 )
     {
       double radius = 0, cx = 0, cy = 0;
@@ -364,11 +364,15 @@ double QgsCircularString::length() const
       if ( !( radius > 0 ) || !std::isfinite( radius ) )
         return; // straight or degenerate arc: outside the precondition
       rMin = std::min( rMin, radius );
+      // arc angle: its absolute rounding error (~eps) is a relative error eps / theta on the arc length
+      thetaMin = std::min( thetaMin, QgsGeometryUtilsBase::circleLength( mX[i], mY[i], mX[i + 1], mY[i + 1], mX[i + 2], mY[i + 2] ) / radius );
     }
+    if ( !( thetaMin > 0 ) )
+      return;
     for ( int i = 0; i < nPoints; ++i )
       coordMax = std::max( { coordMax, std::fabs( mX[i] ), std::fabs( mY[i] ) } );
     // coordinate rounding (eps |coordinate|) relative to the radius limits how well the arc is defined
-    const double conditioning = 64 * QgsSanitizer::EPS * ( coordMax + rMin ) / rMin;
+    const double conditioning = 64 * QgsSanitizer::EPS * ( ( coordMax + rMin ) / rMin + 1.0 / thetaMin );
     const double step = M_PI / 180.0;
     std::unique_ptr<QgsLineString> poly( curveToLine( step, MaximumAngle ) );
     const double lp = poly ? poly->length() : 0.0;

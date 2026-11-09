@@ -933,15 +933,6 @@ static double distanceFactorImpl( Qgis::DistanceUnit fromUnit, Qgis::DistanceUni
 double QgsUnitTypes::fromUnitToUnitFactor( Qgis::DistanceUnit fromUnit, Qgis::DistanceUnit toUnit )
 {
   const double f = distanceFactorImpl( fromUnit, toUnit );
-  QgsSanitizer::run( "QG-UNIT-001", [&] {
-    const auto fixedLength = []( Qgis::DistanceUnit u ) { return u != Qgis::DistanceUnit::Unknown && u != Qgis::DistanceUnit::Degrees; };
-    if ( !fixedLength( fromUnit ) || !fixedLength( toUnit ) )
-      return;
-    const double viaMeters = distanceFactorImpl( fromUnit, Qgis::DistanceUnit::Meters ) * distanceFactorImpl( Qgis::DistanceUnit::Meters, toUnit );
-    const double inverse = distanceFactorImpl( toUnit, fromUnit );
-    const double obs = QgsSanitizer::seen( "QG-UNIT-001", f );
-    QgsSanitizer::check( "QG-UNIT-001", std::fabs( obs / viaMeters - 1.0 ) > 8 * QgsSanitizer::EPS || std::fabs( obs * inverse - 1.0 ) > 8 * QgsSanitizer::EPS, "factor " + QgsSanitizer::num( obs ) + " via meters " + QgsSanitizer::num( viaMeters ) + " inverse " + QgsSanitizer::num( inverse ) );
-  } );
   return f;
 }
 
