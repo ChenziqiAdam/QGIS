@@ -253,6 +253,8 @@ void QgsStatisticalSummary::finalize()
     if ( !quantilesComputed || !std::isfinite( mMin ) || !std::isfinite( mMax ) || !std::isfinite( mMean ) )
       return;
     const double scale = std::max( std::fabs( mMin ), std::fabs( mMax ) );
+    if ( !( scale <= 1e150 ) )
+      return; // sums and midpoints would overflow
     const double tol = 8 * QgsSanitizer::EPS * scale;
     const double lo = QgsSanitizer::fault( "QG-STAT-001" ) ? mMax + 1.0 : mMin;
     const double chain[5] = { lo, mFirstQuartile, mMedian, mThirdQuartile, mMax };
@@ -273,8 +275,8 @@ void QgsStatisticalSummary::finalize()
         return;
       maxAbs = std::max( maxAbs, std::fabs( v ) );
     }
-    if ( !( maxAbs > 0 ) )
-      return;
+    if ( !( maxAbs > 0 ) || !( maxAbs <= 1e150 ) )
+      return; // all zero, or sums and squares would overflow
     const double c = maxAbs; // shift with abs(c) <= 10 max|x|
     // conditioning gate: mean^2 / variance <= 1e4 for both samples, computed independently in long double
     const auto conditioned = [&]( double shift ) {

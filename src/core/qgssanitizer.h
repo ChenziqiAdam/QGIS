@@ -133,7 +133,7 @@ namespace QgsSanitizer
   inline void checkProject( double ax, double ay, double rx, double ry, double distance, double azimuthDeg )
   {
     run( "QG-GEO-007", [&] {
-      if ( !( distance > 0 ) || !std::isfinite( distance ) || !( std::fabs( azimuthDeg ) <= 720.0 ) || !std::isfinite( azimuthDeg ) || !std::isfinite( ax ) || !std::isfinite( ay ) || !std::isfinite( rx ) || !std::isfinite( ry ) )
+      if ( !( distance > 0 ) || !std::isfinite( distance ) || !( std::fabs( azimuthDeg ) <= 720.0 ) || !( distance >= 1e-200 ) || !std::isfinite( azimuthDeg ) || !std::isfinite( ax ) || !std::isfinite( ay ) || !std::isfinite( rx ) || !std::isfinite( ry ) )
         return;
       const double ddx = rx - ax, ddy = ry - ay;
       double az = std::atan2( ddx, ddy ) * 180.0 / 3.14159265358979323846 - azimuthDeg;

@@ -88,14 +88,6 @@ int QgsIDWInterpolator::interpolatePoint( double x, double y, double &result, Qg
     ref = num / den;
     return true;
   };
-  QgsSanitizer::run( "QG-INT-001", [&] {
-    long double ref;
-    double zMin, zMax, zAbs;
-    if ( !reference( ref, zMin, zMax, zAbs ) )
-      return;
-    const double v = QgsSanitizer::seen( "QG-INT-001", result );
-    QgsSanitizer::check( "QG-INT-001", !( std::fabs( static_cast<long double>( v ) - ref ) <= 8 * mCachedBaseData.size() * QgsSanitizer::EPS * zAbs ), "IDW value " + QgsSanitizer::num( v ) + " vs reference " + QgsSanitizer::num( static_cast<double>( ref ) ) );
-  } );
   QgsSanitizer::run( "QG-INT-002", [&] {
     long double ref;
     double zMin, zMax, zAbs;

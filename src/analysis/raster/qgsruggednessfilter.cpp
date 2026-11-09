@@ -91,6 +91,9 @@ float QgsRuggednessFilter::processNineCellWindow( float *x11, float *x21, float 
     const float w[9] = { *x11, *x21, *x31, *x12, *x22, *x32, *x13, *x23, *x33 };
     if ( !QgsTerrainSanitizer::noNodata( w, mInputNodataValue ) || !std::isfinite( result ) || static_cast<double>( result ) == mOutputNodataValue )
       return;
+    // float32 squares of differences must neither underflow nor overflow
+    if ( !( QgsTerrainSanitizer::maxAbs( w ) <= 1e15 ) || ( result != 0 && !( std::fabs( result ) >= 1e-12 ) ) )
+      return;
     float doubled[9];
     for ( int i = 0; i < 9; ++i )
     {

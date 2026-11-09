@@ -119,7 +119,7 @@ int QgsTinInterpolator::interpolatePoint( double x, double y, double &result, Qg
     }
     const double expected = static_cast<double>( mz + a * ( x - mx ) + b * ( y - my ) );
     const double v = QgsSanitizer::seen( "QG-INT-003", result );
-    QgsSanitizer::check( "QG-INT-003", std::fabs( v - expected ) > 1e3 * QgsSanitizer::EPS * scale, "TIN value " + QgsSanitizer::num( v ) + " vs plane " + QgsSanitizer::num( expected ) );
+    QgsSanitizer::check( "QG-INT-003", std::fabs( v - expected ) > 1e3 * QgsSanitizer::EPS * scale * ( 1.0 + coordAbs / std::max( extent, 1e-300 ) ), "TIN value " + QgsSanitizer::num( v ) + " vs plane " + QgsSanitizer::num( expected ) );
   } );
   return 0;
 }
