@@ -181,16 +181,26 @@ void QgsLeastSquares::linear( const QVector<QgsPointXY> &sourceCoordinates, cons
       return;
     for ( int axis = 0; axis < 2; ++axis )
     {
-      long double mx = 0, mX = 0, cov = 0;
+      long double mx = 0, mX = 0, cov = 0, raw = 0, centered = 0;
       for ( int i = 0; i < n; ++i )
       {
-        mx += axis == 0 ? sourceCoordinates[i].x() : sourceCoordinates[i].y();
+        const long double xi = axis == 0 ? sourceCoordinates[i].x() : sourceCoordinates[i].y();
+        mx += xi;
+        raw += xi * xi;
         mX += axis == 0 ? destinationCoordinates[i].x() : destinationCoordinates[i].y();
       }
       mx /= n;
       mX /= n;
       for ( int i = 0; i < n; ++i )
-        cov += ( ( axis == 0 ? sourceCoordinates[i].x() : sourceCoordinates[i].y() ) - mx ) * ( ( axis == 0 ? destinationCoordinates[i].x() : destinationCoordinates[i].y() ) - mX );
+      {
+        const long double xi = axis == 0 ? sourceCoordinates[i].x() : sourceCoordinates[i].y();
+        cov += ( xi - mx ) * ( ( axis == 0 ? destinationCoordinates[i].x() : destinationCoordinates[i].y() ) - mX );
+        centered += ( xi - mx ) * ( xi - mx );
+      }
+      if ( !( centered > 0 ) )
+        continue; // all sources equal on this axis: slope undefined
+      // the regression on one axis is conditioned by that axis alone (second moment over variance)
+      const double axisCond = static_cast<double>( raw / centered );
       const double a = axis == 0 ? origin.x() : origin.y();
       const double b = ( cov < 0 ? -1.0 : 1.0 ) * ( axis == 0 ? pixelXSize : pixelYSize ); // the API returns the magnitude of the slope
       long double ga = 0, gb = 0, terms = 0;
@@ -204,7 +214,7 @@ void QgsLeastSquares::linear( const QVector<QgsPointXY> &sourceCoordinates, cons
         terms += ( 1 + std::fabs( x ) ) * ( std::fabs( a ) + std::fabs( b * x ) + std::fabs( X ) );
       }
       const double g = QgsSanitizer::seen( "QG-GCP-002", static_cast<double>( std::max( std::fabs( ga ), std::fabs( gb ) ) ) );
-      QgsSanitizer::check( "QG-GCP-002", g > 1e3 * QgsSanitizer::EPS * cond * static_cast<double>( terms ), "linear fit gradient " + QgsSanitizer::num( g ) + " on axis " + std::to_string( axis ) );
+      QgsSanitizer::check( "QG-GCP-002", g > 1e3 * QgsSanitizer::EPS * axisCond * static_cast<double>( terms ), "linear fit gradient " + QgsSanitizer::num( g ) + " on axis " + std::to_string( axis ) );
     }
   } );
 }
