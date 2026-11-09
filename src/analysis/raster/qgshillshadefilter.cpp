@@ -17,6 +17,8 @@
 
 #include "qgshillshadefilter.h"
 
+#include "qgsterrainsanitizer.h"
+
 #include <cmath>
 
 QgsHillshadeFilter::QgsHillshadeFilter( const QString &inputFile, const QString &outputFile, const QString &outputFormat, double lightAzimuth, double lightAngle )
@@ -48,7 +50,31 @@ float QgsHillshadeFilter::processNineCellWindow( float *x11, float *x21, float *
   {
     aspect_rad = M_PI + std::atan2( derX, derY );
   }
-  return std::max( 0.0f, 255.0f * ( ( mCosZenithRad * std::cos( slope_rad ) ) + ( mSinZenithRad * std::sin( slope_rad ) * std::cos( mAzimuthRad - aspect_rad ) ) ) );
+  const float result = std::max( 0.0f, 255.0f * ( ( mCosZenithRad * std::cos( slope_rad ) ) + ( mSinZenithRad * std::sin( slope_rad ) * std::cos( mAzimuthRad - aspect_rad ) ) ) );
+
+  QgsSanitizer::run( "QG-TER-003", [&] {
+    const float w[9] = { *x11, *x21, *x31, *x12, *x22, *x32, *x13, *x23, *x33 };
+    QgsTerrainSanitizer::shiftInvariance( w, mInputNodataValue, mOutputNodataValue, mCellSizeX, mCellSizeY, mZFactor, result, QgsTerrainSanitizer::Hillshade, QGS_TERRAIN_EVAL );
+  } );
+  QgsSanitizer::run( "QG-TER-004", [&] {
+    // Lambert's cosine law: illumination = n . s for the surface normal n (independent Horn gradient)
+    // and the unit sun vector s (azimuth clockwise from north, light angle read as the zenith angle,
+    // as the implementation names it)
+    const float w[9] = { *x11, *x21, *x31, *x12, *x22, *x32, *x13, *x23, *x33 };
+    if ( !QgsTerrainSanitizer::noNodata( w, mInputNodataValue ) || !std::isfinite( result ) || !( mCellSizeX > 0 ) || !( mCellSizeY > 0 ) || !std::isfinite( mZFactor ) || !( mLightAngle > 0 && mLightAngle <= 90 ) || !std::isfinite( mLightAzimuth ) )
+      return;
+    double gx, gy;
+    QgsTerrainSanitizer::hornGradient( w, mCellSizeX, mCellSizeY, gx, gy );
+    gx *= mZFactor;
+    gy *= mZFactor;
+    const double zen = static_cast<double>( mLightAngle ) * M_PI / 180.0, az = static_cast<double>( mLightAzimuth ) * M_PI / 180.0;
+    const double ns = ( std::cos( zen ) - std::sin( zen ) * ( gx * std::sin( az ) + gy * std::cos( az ) ) ) / std::sqrt( 1.0 + gx * gx + gy * gy );
+    const double expected = 255.0 * std::max( 0.0, ns );
+    const double obs = QgsSanitizer::seen( "QG-TER-004", result );
+    const double tol = 255.0 * ( 64 * QgsSanitizer::EPS32 + 8 * QgsSanitizer::EPS32 * QgsTerrainSanitizer::maxAbs( w ) * std::fabs( mZFactor ) / std::min( mCellSizeX, mCellSizeY ) ) + 1e-3;
+    QgsSanitizer::check( "QG-TER-004", std::fabs( obs - expected ) > tol, "hillshade " + QgsSanitizer::num( obs ) + " vs Lambert " + QgsSanitizer::num( expected ) );
+  } );
+  return result;
 }
 
 void QgsHillshadeFilter::setLightAzimuth( float azimuth )

@@ -17,6 +17,8 @@
 
 #include "qgsruggednessfilter.h"
 
+#include "qgsterrainsanitizer.h"
+
 #include <cmath>
 
 QgsRuggednessFilter::QgsRuggednessFilter( const QString &inputFile, const QString &outputFile, const QString &outputFormat )
@@ -79,5 +81,28 @@ float QgsRuggednessFilter::processNineCellWindow( float *x11, float *x21, float 
     sum += ( *x33 - *x22 ) * ( *x33 - *x22 );
   }
 
-  return std::sqrt( sum );
+  const float result = std::sqrt( sum );
+
+  QgsSanitizer::run( "QG-TER-003", [&] {
+    const float w[9] = { *x11, *x21, *x31, *x12, *x22, *x32, *x13, *x23, *x33 };
+    QgsTerrainSanitizer::shiftInvariance( w, mInputNodataValue, mOutputNodataValue, mCellSizeX, mCellSizeY, mZFactor, result, QgsTerrainSanitizer::Ruggedness, QGS_TERRAIN_EVAL );
+  } );
+  QgsSanitizer::run( "QG-TER-006", [&] {
+    const float w[9] = { *x11, *x21, *x31, *x12, *x22, *x32, *x13, *x23, *x33 };
+    if ( !QgsTerrainSanitizer::noNodata( w, mInputNodataValue ) || !std::isfinite( result ) || static_cast<double>( result ) == mOutputNodataValue )
+      return;
+    float doubled[9];
+    for ( int i = 0; i < 9; ++i )
+    {
+      doubled[i] = 2.0f * w[i]; // exact in binary floating point
+      if ( !std::isfinite( doubled[i] ) || static_cast<double>( doubled[i] ) == mInputNodataValue )
+        return;
+    }
+    const float r2 = QGS_TERRAIN_EVAL( doubled );
+    if ( !std::isfinite( r2 ) || static_cast<double>( r2 ) == mOutputNodataValue )
+      return;
+    const double a = QgsSanitizer::seen( "QG-TER-006", result );
+    QgsSanitizer::check( "QG-TER-006", std::fabs( r2 - 2.0 * a ) > 16 * QgsSanitizer::EPS32 * std::fabs( a ), "ruggedness " + QgsSanitizer::num( a ) + " but doubled elevations give " + QgsSanitizer::num( r2 ) );
+  } );
+  return result;
 }

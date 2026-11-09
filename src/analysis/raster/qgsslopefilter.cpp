@@ -17,6 +17,8 @@
 
 #include "qgsslopefilter.h"
 
+#include "qgsterrainsanitizer.h"
+
 #include <cmath>
 
 QgsSlopeFilter::QgsSlopeFilter( const QString &inputFile, const QString &outputFile, const QString &outputFormat )
@@ -33,5 +35,24 @@ float QgsSlopeFilter::processNineCellWindow( float *x11, float *x21, float *x31,
     return mOutputNodataValue;
   }
 
-  return std::atan( std::sqrt( derX * derX + derY * derY ) ) * 180.0 / M_PI;
+  const float result = std::atan( std::sqrt( derX * derX + derY * derY ) ) * 180.0 / M_PI;
+
+  QgsSanitizer::run( "QG-TER-001", [&] {
+    const float w[9] = { *x11, *x21, *x31, *x12, *x22, *x32, *x13, *x23, *x33 };
+    if ( !QgsTerrainSanitizer::noNodata( w, mInputNodataValue ) || !std::isfinite( result ) || mCellSizeX != mCellSizeY || !( mCellSizeX > 0 ) || !std::isfinite( mZFactor ) )
+      return;
+    float rot[9]; // rotated by 90 degrees: rot[r][c] = w[2 - c][r]
+    for ( int r = 0; r < 3; ++r )
+      for ( int c = 0; c < 3; ++c )
+        rot[r * 3 + c] = w[( 2 - c ) * 3 + r];
+    const float r2 = QGS_TERRAIN_EVAL( rot );
+    const double a = QgsSanitizer::seen( "QG-TER-001", result );
+    const double tol = 1e-4 + 64 * QgsTerrainSanitizer::RAD2DEG * QgsSanitizer::EPS32 * QgsTerrainSanitizer::maxAbs( w ) * std::fabs( mZFactor ) / mCellSizeX;
+    QgsSanitizer::check( "QG-TER-001", std::fabs( a - r2 ) > tol, "slope " + QgsSanitizer::num( a ) + " vs rotated window " + QgsSanitizer::num( r2 ) );
+  } );
+  QgsSanitizer::run( "QG-TER-003", [&] {
+    const float w[9] = { *x11, *x21, *x31, *x12, *x22, *x32, *x13, *x23, *x33 };
+    QgsTerrainSanitizer::shiftInvariance( w, mInputNodataValue, mOutputNodataValue, mCellSizeX, mCellSizeY, mZFactor, result, QgsTerrainSanitizer::Slope, QGS_TERRAIN_EVAL );
+  } );
+  return result;
 }

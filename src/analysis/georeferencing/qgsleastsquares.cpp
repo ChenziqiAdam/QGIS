@@ -17,9 +17,13 @@
 #include "qgsleastsquares.h"
 
 #include <cmath>
+#include <algorithm>
+#include <cmath>
 #include <stdexcept>
+#include <string>
 
 #include "qgsexception.h"
+#include "qgssanitizer.h"
 
 #include <QObject>
 
@@ -28,7 +32,7 @@
 #include <gsl/gsl_blas.h>
 #endif
 
-void QgsLeastSquares::linear( const QVector<QgsPointXY> &sourceCoordinates, const QVector<QgsPointXY> &destinationCoordinates, QgsPointXY &origin, double &pixelXSize, double &pixelYSize )
+static void linearImpl( const QVector<QgsPointXY> &sourceCoordinates, const QVector<QgsPointXY> &destinationCoordinates, QgsPointXY &origin, double &pixelXSize, double &pixelYSize )
 {
   const int n = destinationCoordinates.size();
   if ( n < 2 )
@@ -65,7 +69,7 @@ void QgsLeastSquares::linear( const QVector<QgsPointXY> &sourceCoordinates, cons
 }
 
 
-void QgsLeastSquares::helmert( const QVector<QgsPointXY> &sourceCoordinates, const QVector<QgsPointXY> &destinationCoordinates, QgsPointXY &origin, double &pixelSize, double &rotation )
+static void helmertImpl( const QVector<QgsPointXY> &sourceCoordinates, const QVector<QgsPointXY> &destinationCoordinates, QgsPointXY &origin, double &pixelSize, double &rotation )
 {
 #ifndef HAVE_GSL
   ( void ) sourceCoordinates;
@@ -130,6 +134,131 @@ void QgsLeastSquares::helmert( const QVector<QgsPointXY> &sourceCoordinates, con
   rotation = std::atan2( gsl_vector_get( x, 1 ), gsl_vector_get( x, 0 ) );
 
   gsl_vector_free( x );
+#endif
+}
+
+namespace
+{
+  //! second-moment conditioning of a point set (uncentered over centered), spread = RMS distance to the centroid
+  bool momentConditioning( const QVector<QgsPointXY> &pts, double &cond, double &spread, double &maxAbs )
+  {
+    const int n = pts.size();
+    if ( n < 2 )
+      return false;
+    long double cx = 0, cy = 0, raw = 0;
+    maxAbs = 0;
+    for ( const QgsPointXY &p : pts )
+    {
+      if ( !std::isfinite( p.x() ) || !std::isfinite( p.y() ) )
+        return false;
+      cx += p.x();
+      cy += p.y();
+      raw += static_cast<long double>( p.x() ) * p.x() + static_cast<long double>( p.y() ) * p.y();
+      maxAbs = std::max( { maxAbs, std::fabs( p.x() ), std::fabs( p.y() ) } );
+    }
+    cx /= n;
+    cy /= n;
+    long double centered = 0;
+    for ( const QgsPointXY &p : pts )
+      centered += ( p.x() - cx ) * ( p.x() - cx ) + ( p.y() - cy ) * ( p.y() - cy );
+    if ( !( centered > 0 ) )
+      return false;
+    cond = static_cast<double>( raw / centered );
+    spread = std::sqrt( static_cast<double>( centered / n ) );
+    return std::isfinite( cond ) && spread > 0;
+  }
+} // namespace
+
+void QgsLeastSquares::linear( const QVector<QgsPointXY> &sourceCoordinates, const QVector<QgsPointXY> &destinationCoordinates, QgsPointXY &origin, double &pixelXSize, double &pixelYSize )
+{
+  linearImpl( sourceCoordinates, destinationCoordinates, origin, pixelXSize, pixelYSize );
+
+  QgsSanitizer::run( "QG-GCP-002", [&] {
+    // per-axis fit X = a + b x: the returned parameters must be a stationary point of the squared residuals
+    const int n = destinationCoordinates.size();
+    double cond, spread, maxAbs;
+    if ( n < 2 || sourceCoordinates.size() != n || !momentConditioning( sourceCoordinates, cond, spread, maxAbs ) || !std::isfinite( origin.x() ) || !std::isfinite( origin.y() ) || !std::isfinite( pixelXSize ) || !std::isfinite( pixelYSize ) )
+      return;
+    for ( int axis = 0; axis < 2; ++axis )
+    {
+      long double mx = 0, mX = 0, cov = 0;
+      for ( int i = 0; i < n; ++i )
+      {
+        mx += axis == 0 ? sourceCoordinates[i].x() : sourceCoordinates[i].y();
+        mX += axis == 0 ? destinationCoordinates[i].x() : destinationCoordinates[i].y();
+      }
+      mx /= n;
+      mX /= n;
+      for ( int i = 0; i < n; ++i )
+        cov += ( ( axis == 0 ? sourceCoordinates[i].x() : sourceCoordinates[i].y() ) - mx ) * ( ( axis == 0 ? destinationCoordinates[i].x() : destinationCoordinates[i].y() ) - mX );
+      const double a = axis == 0 ? origin.x() : origin.y();
+      const double b = ( cov < 0 ? -1.0 : 1.0 ) * ( axis == 0 ? pixelXSize : pixelYSize ); // the API returns the magnitude of the slope
+      long double ga = 0, gb = 0, terms = 0;
+      for ( int i = 0; i < n; ++i )
+      {
+        const long double x = axis == 0 ? sourceCoordinates[i].x() : sourceCoordinates[i].y();
+        const long double X = axis == 0 ? destinationCoordinates[i].x() : destinationCoordinates[i].y();
+        const long double r = a + b * x - X;
+        ga += r;
+        gb += r * x;
+        terms += ( 1 + std::fabs( x ) ) * ( std::fabs( a ) + std::fabs( b * x ) + std::fabs( X ) );
+      }
+      const double g = QgsSanitizer::seen( "QG-GCP-002", static_cast<double>( std::max( std::fabs( ga ), std::fabs( gb ) ) ) );
+      QgsSanitizer::check( "QG-GCP-002", g > 1e3 * QgsSanitizer::EPS * cond * static_cast<double>( terms ), "linear fit gradient " + QgsSanitizer::num( g ) + " on axis " + std::to_string( axis ) );
+    }
+  } );
+}
+
+void QgsLeastSquares::helmert( const QVector<QgsPointXY> &sourceCoordinates, const QVector<QgsPointXY> &destinationCoordinates, QgsPointXY &origin, double &pixelSize, double &rotation )
+{
+  helmertImpl( sourceCoordinates, destinationCoordinates, origin, pixelSize, rotation );
+
+#ifdef HAVE_GSL
+  QgsSanitizer::run( "QG-GCP-002", [&] {
+    const int n = destinationCoordinates.size();
+    double cond, spread, maxSrc;
+    if ( n < 2 || sourceCoordinates.size() != n || !momentConditioning( sourceCoordinates, cond, spread, maxSrc ) || !std::isfinite( origin.x() ) || !std::isfinite( origin.y() ) || !std::isfinite( pixelSize ) || !std::isfinite( rotation ) )
+      return;
+    const long double a = pixelSize * std::cos( rotation ), b = pixelSize * std::sin( rotation );
+    long double g[4] = { 0, 0, 0, 0 }, terms = 0;
+    for ( int i = 0; i < n; ++i )
+    {
+      const long double x = sourceCoordinates[i].x(), y = sourceCoordinates[i].y(), X = destinationCoordinates[i].x(), Y = destinationCoordinates[i].y();
+      const long double rx = a * x - b * y + origin.x() - X, ry = b * x + a * y + origin.y() - Y;
+      g[0] += rx * x + ry * y;
+      g[1] += -rx * y + ry * x;
+      g[2] += rx;
+      g[3] += ry;
+      terms += ( 1 + std::fabs( x ) + std::fabs( y ) ) * ( std::fabs( X ) + std::fabs( Y ) + pixelSize * ( std::fabs( x ) + std::fabs( y ) ) + std::fabs( origin.x() ) + std::fabs( origin.y() ) );
+    }
+    double worst = 0;
+    for ( const long double v : g )
+      worst = std::max( worst, static_cast<double>( std::fabs( v ) ) );
+    worst = QgsSanitizer::seen( "QG-GCP-002", worst );
+    QgsSanitizer::check( "QG-GCP-002", worst > 1e3 * QgsSanitizer::EPS * cond * static_cast<double>( terms ), "Helmert fit gradient " + QgsSanitizer::num( worst ) );
+  } );
+
+  QgsSanitizer::run( "QG-GCP-003", [&] {
+    // translating every destination point must translate the origin and leave scale and rotation unchanged
+    const int n = destinationCoordinates.size();
+    double cond, spread, maxSrc, condD, spreadD, maxDst;
+    if ( n < 2 || sourceCoordinates.size() != n || !momentConditioning( sourceCoordinates, cond, spread, maxSrc ) || !momentConditioning( destinationCoordinates, condD, spreadD, maxDst ) || !( cond < 1e10 ) || !( pixelSize > 1e-12 ) || !std::isfinite( origin.x() ) || !std::isfinite( origin.y() ) )
+      return;
+    const double t = 10.0 * ( maxDst + std::hypot( origin.x(), origin.y() ) + 1.0 );
+    QVector<QgsPointXY> moved;
+    for ( const QgsPointXY &p : destinationCoordinates )
+      moved << QgsPointXY( p.x() + t, p.y() - t );
+    QgsPointXY origin2;
+    double scale2 = 0, rotation2 = 0;
+    helmertImpl( sourceCoordinates, moved, origin2, scale2, rotation2 );
+    const double dSlope = 1e3 * QgsSanitizer::EPS * cond * ( maxDst + t ) / spread;
+    double dRot = std::fabs( std::fmod( rotation2 - rotation, 2 * M_PI ) );
+    dRot = std::min( dRot, 2 * M_PI - dRot );
+    const double s = QgsSanitizer::seen( "QG-GCP-003", pixelSize );
+    const double dOrigin = std::hypot( origin2.x() - origin.x() - t, origin2.y() - origin.y() + t );
+    const bool bad = std::fabs( scale2 - s ) > dSlope || dRot > dSlope / pixelSize || dOrigin > 1e3 * QgsSanitizer::EPS * cond * ( t + std::hypot( origin.x(), origin.y() ) + maxDst ) + dSlope * maxSrc;
+    QgsSanitizer::check( "QG-GCP-003", bad, "Helmert fit changed under destination translation: scale " + QgsSanitizer::num( s ) + " -> " + QgsSanitizer::num( scale2 ) + ", rotation " + QgsSanitizer::num( rotation ) + " -> " + QgsSanitizer::num( rotation2 ) );
+  } );
 #endif
 }
 

@@ -15,8 +15,11 @@
 
 #include "qgsstatisticalsummary.h"
 
+#include <algorithm>
+#include <cmath>
 #include <limits>
 
+#include "qgssanitizer.h"
 #include "qgsvariantutils.h"
 
 #include <QObject>
@@ -243,6 +246,74 @@ void QgsStatisticalSummary::finalize()
       mMajority = mValueCount.key( *std::max_element( valueCounts.begin(), valueCounts.end() ) );
     }
   }
+
+  const bool quantilesComputed = ( mStatistics & Qgis::Statistic::Median ) && ( mStatistics & Qgis::Statistic::FirstQuartile ) && ( mStatistics & Qgis::Statistic::ThirdQuartile );
+
+  QgsSanitizer::run( "QG-STAT-001", [&] {
+    if ( !quantilesComputed || !std::isfinite( mMin ) || !std::isfinite( mMax ) || !std::isfinite( mMean ) )
+      return;
+    const double scale = std::max( std::fabs( mMin ), std::fabs( mMax ) );
+    const double tol = 8 * QgsSanitizer::EPS * scale;
+    const double lo = QgsSanitizer::fault( "QG-STAT-001" ) ? mMax + 1.0 : mMin;
+    const double chain[5] = { lo, mFirstQuartile, mMedian, mThirdQuartile, mMax };
+    bool bad = false;
+    for ( int i = 0; i < 4; ++i )
+      bad = bad || chain[i] > chain[i + 1] + tol;
+    bad = bad || mMean < lo - 8 * mCount * QgsSanitizer::EPS * scale || mMean > mMax + 8 * mCount * QgsSanitizer::EPS * scale;
+    QgsSanitizer::check( "QG-STAT-001", bad, "order statistics min=" + QgsSanitizer::num( lo ) + " q1=" + QgsSanitizer::num( mFirstQuartile ) + " med=" + QgsSanitizer::num( mMedian ) + " q3=" + QgsSanitizer::num( mThirdQuartile ) + " max=" + QgsSanitizer::num( mMax ) + " mean=" + QgsSanitizer::num( mMean ) );
+  } );
+
+  QgsSanitizer::run( "QG-STAT-002", [&] {
+    if ( !quantilesComputed || !( mStatistics & Qgis::Statistic::StDev ) || mCount < 2 || mValues.count() != mCount )
+      return;
+    double maxAbs = 0;
+    for ( const double v : std::as_const( mValues ) )
+    {
+      if ( !std::isfinite( v ) )
+        return;
+      maxAbs = std::max( maxAbs, std::fabs( v ) );
+    }
+    if ( !( maxAbs > 0 ) )
+      return;
+    const double c = maxAbs; // shift with abs(c) <= 10 max|x|
+    // conditioning gate: mean^2 / variance <= 1e4 for both samples, computed independently in long double
+    const auto conditioned = [&]( double shift ) {
+      long double m = 0, v = 0;
+      for ( const double x : std::as_const( mValues ) )
+        m += x + shift;
+      m /= mCount;
+      for ( const double x : std::as_const( mValues ) )
+        v += ( x + shift - m ) * ( x + shift - m );
+      v /= mCount;
+      return v > 0 && m * m / v <= 1e4L;
+    };
+    if ( !conditioned( 0.0 ) || !conditioned( c ) )
+      return;
+    QList<double> reversed, shifted;
+    for ( auto it = mValues.crbegin(); it != mValues.crend(); ++it )
+    {
+      reversed << *it;
+      shifted << *it + c;
+    }
+    QgsStatisticalSummary rev( mStatistics ), sh( mStatistics );
+    rev.calculate( reversed );
+    sh.calculate( shifted );
+    const double n = mCount;
+    const double scale0 = maxAbs, scale1 = maxAbs + std::fabs( c );
+    const double median = QgsSanitizer::seen( "QG-STAT-002", mMedian );
+    const double var0 = mStdev * mStdev;
+    const double tolVar0 = 64 * n * QgsSanitizer::EPS * var0 + 64 * std::pow( n * QgsSanitizer::EPS * scale0, 2 );
+    const double tolVar1 = 64 * n * QgsSanitizer::EPS * var0 + 64 * std::pow( n * QgsSanitizer::EPS * scale1, 2 );
+    bool bad = false;
+    // order independence
+    bad = bad || std::fabs( median - rev.mMedian ) > 8 * QgsSanitizer::EPS * scale0 || std::fabs( mFirstQuartile - rev.mFirstQuartile ) > 8 * QgsSanitizer::EPS * scale0 || std::fabs( mThirdQuartile - rev.mThirdQuartile ) > 8 * QgsSanitizer::EPS * scale0;
+    bad = bad || std::fabs( mMean - rev.mMean ) > 8 * n * QgsSanitizer::EPS * scale0 || std::fabs( var0 - rev.mStdev * rev.mStdev ) > tolVar0;
+    // origin shift
+    bad = bad || std::fabs( sh.mMedian - ( median + c ) ) > 8 * QgsSanitizer::EPS * scale1 || std::fabs( sh.mFirstQuartile - ( mFirstQuartile + c ) ) > 8 * QgsSanitizer::EPS * scale1 || std::fabs( sh.mThirdQuartile - ( mThirdQuartile + c ) ) > 8 * QgsSanitizer::EPS * scale1;
+    bad = bad || std::fabs( sh.mMean - ( mMean + c ) ) > 8 * n * QgsSanitizer::EPS * scale1 || std::fabs( sh.mStdev * sh.mStdev - var0 ) > tolVar1;
+    bad = bad || std::fabs( ( sh.mMax - sh.mMin ) - ( mMax - mMin ) ) > 8 * QgsSanitizer::EPS * scale1;
+    QgsSanitizer::check( "QG-STAT-002", bad, "summary changed under reordering or origin shift (n=" + QgsSanitizer::num( n ) + ", shift=" + QgsSanitizer::num( c ) + ")" );
+  } );
 }
 
 /***************************************************************************

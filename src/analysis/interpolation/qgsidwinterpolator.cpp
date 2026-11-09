@@ -17,11 +17,13 @@
 
 #include "qgsidwinterpolator.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
 #include "qgis.h"
 #include "qgsgeometryutils_base.h"
+#include "qgssanitizer.h"
 
 QgsIDWInterpolator::QgsIDWInterpolator( const QList<LayerData> &layerData )
   : QgsInterpolator( layerData )
@@ -56,5 +58,52 @@ int QgsIDWInterpolator::interpolatePoint( double x, double y, double &result, Qg
   }
 
   result = sumCounter / sumDenominator;
+
+  // shared precondition: coefficient in (0, 10], finite data, query away from every node; returns the independent
+  // Shepard reference (long double, weights relative to the nearest vertex) and the data range
+  const auto reference = [&]( long double &ref, double &zMin, double &zMax, double &zAbs ) {
+    if ( !( mDistanceCoefficient > 0 && mDistanceCoefficient <= 10 ) || mCachedBaseData.isEmpty() || !std::isfinite( x ) || !std::isfinite( y ) )
+      return false;
+    double dMin = std::numeric_limits<double>::max();
+    zMin = std::numeric_limits<double>::max();
+    zMax = -zMin;
+    zAbs = 0;
+    for ( const QgsInterpolatorVertexData &v : std::as_const( mCachedBaseData ) )
+    {
+      const double d = std::hypot( v.x - x, v.y - y );
+      if ( !std::isfinite( d ) || !std::isfinite( v.z ) || !( d > 0 ) )
+        return false;
+      dMin = std::min( dMin, d );
+      zMin = std::min( zMin, v.z );
+      zMax = std::max( zMax, v.z );
+      zAbs = std::max( zAbs, std::fabs( v.z ) );
+    }
+    long double num = 0, den = 0;
+    for ( const QgsInterpolatorVertexData &v : std::as_const( mCachedBaseData ) )
+    {
+      const long double w = std::pow( static_cast<long double>( dMin ) / std::hypot( v.x - x, v.y - y ), static_cast<long double>( mDistanceCoefficient ) );
+      num += w * v.z;
+      den += w;
+    }
+    ref = num / den;
+    return true;
+  };
+  QgsSanitizer::run( "QG-INT-001", [&] {
+    long double ref;
+    double zMin, zMax, zAbs;
+    if ( !reference( ref, zMin, zMax, zAbs ) )
+      return;
+    const double v = QgsSanitizer::seen( "QG-INT-001", result );
+    QgsSanitizer::check( "QG-INT-001", !( std::fabs( static_cast<long double>( v ) - ref ) <= 8 * mCachedBaseData.size() * QgsSanitizer::EPS * zAbs ), "IDW value " + QgsSanitizer::num( v ) + " vs reference " + QgsSanitizer::num( static_cast<double>( ref ) ) );
+  } );
+  QgsSanitizer::run( "QG-INT-002", [&] {
+    long double ref;
+    double zMin, zMax, zAbs;
+    if ( !reference( ref, zMin, zMax, zAbs ) )
+      return;
+    const double slack = 8 * mCachedBaseData.size() * QgsSanitizer::EPS * zAbs;
+    const double v = QgsSanitizer::fault( "QG-INT-002" ) ? zMax + 1.0 + std::fabs( zMax ) : result;
+    QgsSanitizer::check( "QG-INT-002", !( v >= zMin - slack && v <= zMax + slack ), "IDW value " + QgsSanitizer::num( v ) + " outside data range [" + QgsSanitizer::num( zMin ) + "," + QgsSanitizer::num( zMax ) + "]" );
+  } );
   return 0;
 }

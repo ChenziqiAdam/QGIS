@@ -17,6 +17,8 @@
 
 #include "qgstotalcurvaturefilter.h"
 
+#include "qgsterrainsanitizer.h"
+
 QgsTotalCurvatureFilter::QgsTotalCurvatureFilter( const QString &inputFile, const QString &outputFile, const QString &outputFormat )
   : QgsNineCellFilter( inputFile, outputFile, outputFormat )
 {}
@@ -42,5 +44,28 @@ float QgsTotalCurvatureFilter::processNineCellWindow( float *x11, float *x21, fl
   const double dxy = ( -*x11 + *x31 + *x13 - *x33 ) / ( 4 * cellSizeAvg * cellSizeAvg );
   const double dyy = ( *x21 - 2 * *x22 + *x23 ) / ( mCellSizeY * mCellSizeY );
 
-  return dxx * dxx + 2 * dxy * dxy + dyy * dyy;
+  const float result = dxx * dxx + 2 * dxy * dxy + dyy * dyy;
+
+  QgsSanitizer::run( "QG-TER-003", [&] {
+    const float w[9] = { *x11, *x21, *x31, *x12, *x22, *x32, *x13, *x23, *x33 };
+    QgsTerrainSanitizer::shiftInvariance( w, mInputNodataValue, mOutputNodataValue, mCellSizeX, mCellSizeY, mZFactor, result, QgsTerrainSanitizer::Curvature, QGS_TERRAIN_EVAL );
+  } );
+  QgsSanitizer::run( "QG-TER-006", [&] {
+    const float w[9] = { *x11, *x21, *x31, *x12, *x22, *x32, *x13, *x23, *x33 };
+    if ( !QgsTerrainSanitizer::noNodata( w, mInputNodataValue ) || !std::isfinite( result ) || static_cast<double>( result ) == mOutputNodataValue )
+      return;
+    float doubled[9];
+    for ( int i = 0; i < 9; ++i )
+    {
+      doubled[i] = 2.0f * w[i];
+      if ( !std::isfinite( doubled[i] ) || static_cast<double>( doubled[i] ) == mInputNodataValue )
+        return;
+    }
+    const float r2 = QGS_TERRAIN_EVAL( doubled );
+    if ( !std::isfinite( r2 ) || static_cast<double>( r2 ) == mOutputNodataValue )
+      return;
+    const double a = QgsSanitizer::seen( "QG-TER-006", result );
+    QgsSanitizer::check( "QG-TER-006", std::fabs( r2 - 4.0 * a ) > 16 * QgsSanitizer::EPS32 * std::fabs( a ), "curvature " + QgsSanitizer::num( a ) + " but doubled elevations give " + QgsSanitizer::num( r2 ) );
+  } );
+  return result;
 }

@@ -22,6 +22,7 @@
 
 #include "qgsexception.h"
 #include "qgspoint.h"
+#include "qgssanitizer.h"
 
 #include <QObject>
 #include <QString>
@@ -94,7 +95,9 @@ QgsPointXY QgsPointXY::project( double distance, double bearing ) const
   const double rads = bearing * M_PI / 180.0;
   const double dx = distance * std::sin( rads );
   const double dy = distance * std::cos( rads );
-  return QgsPointXY( mX + dx, mY + dy );
+  const QgsPointXY result( mX + dx, mY + dy );
+  QgsSanitizer::checkProject( mX, mY, result.x(), result.y(), distance, bearing );
+  return result;
 }
 
 double QgsPointXY::sqrDistToSegment( double x1, double y1, double x2, double y2, QgsPointXY &minDistPoint, double epsilon ) const

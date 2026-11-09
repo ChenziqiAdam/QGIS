@@ -17,6 +17,8 @@
 
 #include "qgsderivativefilter.h"
 
+#include "qgsterrainsanitizer.h"
+
 QgsDerivativeFilter::QgsDerivativeFilter( const QString &inputFile, const QString &outputFile, const QString &outputFormat )
   : QgsNineCellFilter( inputFile, outputFile, outputFormat )
 {}
@@ -85,7 +87,31 @@ float QgsDerivativeFilter::calcFirstDerX( float x11, float x21, float x31, float
     return mOutputNodataValue;
   }
 
-  return sum / ( weight * mCellSizeX ) * mZFactor;
+  const float result = sum / ( weight * mCellSizeX ) * mZFactor;
+
+  QgsSanitizer::run( "QG-TER-005", [&] {
+    const float w[9] = { x11, x21, x31, x12, x22, x32, x13, x23, x33 };
+    if ( !QgsTerrainSanitizer::noNodata( w, mInputNodataValue ) || !std::isfinite( result ) || !( mCellSizeX > 0 ) || !( mCellSizeY > 0 ) || !std::isfinite( mZFactor ) )
+      return;
+    // least-squares plane z = z0 + a x + b y on the symmetric 3x3 grid (x east, y north)
+    double mean = 0, a = 0, b = 0;
+    for ( int r = 0; r < 3; ++r )
+      for ( int c = 0; c < 3; ++c )
+      {
+        mean += w[r * 3 + c] / 9.0;
+        a += w[r * 3 + c] * ( c - 1 ) / ( 6.0 * mCellSizeX );
+        b += w[r * 3 + c] * ( 1 - r ) / ( 6.0 * mCellSizeY );
+      }
+    const double m = QgsTerrainSanitizer::maxAbs( w );
+    for ( int r = 0; r < 3; ++r )
+      for ( int c = 0; c < 3; ++c )
+        if ( std::fabs( w[r * 3 + c] - ( mean + a * ( c - 1 ) * mCellSizeX + b * ( 1 - r ) * mCellSizeY ) ) > 8 * QgsSanitizer::EPS32 * m )
+          return; // window is not planar
+    const double expected = a * mZFactor;
+    const double obs = QgsSanitizer::seen( "QG-TER-005", result );
+    QgsSanitizer::check( "QG-TER-005", std::fabs( obs - expected ) > 64 * QgsSanitizer::EPS32 * m * std::fabs( mZFactor ) / std::min( mCellSizeX, mCellSizeY ), "gradient X " + QgsSanitizer::num( obs ) + " vs plane " + QgsSanitizer::num( expected ) );
+  } );
+  return result;
 }
 
 float QgsDerivativeFilter::calcFirstDerY( float x11, float x21, float x31, float x12, float x22, float x32, float x13, float x23, float x33 ) const
@@ -152,5 +178,29 @@ float QgsDerivativeFilter::calcFirstDerY( float x11, float x21, float x31, float
     return mOutputNodataValue;
   }
 
-  return sum / ( weight * mCellSizeY ) * mZFactor;
+  const float result = sum / ( weight * mCellSizeY ) * mZFactor;
+
+  QgsSanitizer::run( "QG-TER-005", [&] {
+    const float w[9] = { x11, x21, x31, x12, x22, x32, x13, x23, x33 };
+    if ( !QgsTerrainSanitizer::noNodata( w, mInputNodataValue ) || !std::isfinite( result ) || !( mCellSizeX > 0 ) || !( mCellSizeY > 0 ) || !std::isfinite( mZFactor ) )
+      return;
+    // least-squares plane z = z0 + a x + b y on the symmetric 3x3 grid (x east, y north)
+    double mean = 0, a = 0, b = 0;
+    for ( int r = 0; r < 3; ++r )
+      for ( int c = 0; c < 3; ++c )
+      {
+        mean += w[r * 3 + c] / 9.0;
+        a += w[r * 3 + c] * ( c - 1 ) / ( 6.0 * mCellSizeX );
+        b += w[r * 3 + c] * ( 1 - r ) / ( 6.0 * mCellSizeY );
+      }
+    const double m = QgsTerrainSanitizer::maxAbs( w );
+    for ( int r = 0; r < 3; ++r )
+      for ( int c = 0; c < 3; ++c )
+        if ( std::fabs( w[r * 3 + c] - ( mean + a * ( c - 1 ) * mCellSizeX + b * ( 1 - r ) * mCellSizeY ) ) > 8 * QgsSanitizer::EPS32 * m )
+          return; // window is not planar
+    const double expected = b * mZFactor;
+    const double obs = QgsSanitizer::seen( "QG-TER-005", result );
+    QgsSanitizer::check( "QG-TER-005", std::fabs( obs - expected ) > 64 * QgsSanitizer::EPS32 * m * std::fabs( mZFactor ) / std::min( mCellSizeX, mCellSizeY ), "gradient Y " + QgsSanitizer::num( obs ) + " vs plane " + QgsSanitizer::num( expected ) );
+  } );
+  return result;
 }

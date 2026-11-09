@@ -15,7 +15,14 @@
 
 #include "qgskde.h"
 
+#include <cmath>
+#include <set>
+#include <string>
+#include <tuple>
+#include <vector>
+
 #include "qgsfeatureiterator.h"
+#include "qgssanitizer.h"
 #include "qgsfeaturesource.h"
 #include "qgsgeometry.h"
 
@@ -256,10 +263,79 @@ bool QgsKernelDensityEstimation::createEmptyLayer( GDALDriverH driver, const Qgs
   return true;
 }
 
+namespace
+{
+  //! Gauss-Legendre nodes and weights on [-1, 1] (Newton iteration on the Legendre polynomial)
+  void gaussLegendre( int n, std::vector<double> &x, std::vector<double> &w )
+  {
+    x.assign( n, 0.0 );
+    w.assign( n, 0.0 );
+    for ( int i = 0; i < n; ++i )
+    {
+      double z = std::cos( M_PI * ( i + 0.75 ) / ( n + 0.5 ) ), dp = 1;
+      for ( int it = 0; it < 100; ++it )
+      {
+        double p0 = 1, p1 = z;
+        for ( int k = 2; k <= n; ++k )
+        {
+          const double p2 = ( ( 2.0 * k - 1.0 ) * z * p1 - ( k - 1.0 ) * p0 ) / k;
+          p0 = p1;
+          p1 = p2;
+        }
+        dp = n * ( z * p1 - p0 ) / ( z * z - 1.0 );
+        const double dz = p1 / dp;
+        z -= dz;
+        if ( std::fabs( dz ) < 1e-16 )
+          break;
+      }
+      x[i] = z;
+      w[i] = 2.0 / ( ( 1.0 - z * z ) * dp * dp );
+    }
+  }
+} // namespace
+
 double QgsKernelDensityEstimation::calculateKernelValue(
   const double distance, const double bandwidth, const QgsKernelDensityEstimation::KernelShape shape, const QgsKernelDensityEstimation::OutputValues outputType
 ) const
 {
+  if ( QgsSanitizer::enabled() && !QgsSanitizer::busy() )
+  {
+    // each (shape, bandwidth, decay) kernel is checked once
+    thread_local std::set<std::tuple<int, double, double>> checked;
+    const auto key = std::make_tuple( static_cast<int>( shape ), bandwidth, mDecay );
+    if ( checked.size() < 4096 && checked.insert( key ).second && bandwidth > 0 && bandwidth <= 1e12 && std::isfinite( bandwidth ) && mDecay >= 0 && std::isfinite( mDecay ) )
+    {
+      QgsSanitizer::run( "QG-KDE-001", [&] {
+        // the scaled kernel is a probability density on the plane: integral of K(d) 2 pi d dd over [0, bandwidth] is 1
+        std::vector<double> nodes, weights;
+        gaussLegendre( 64, nodes, weights );
+        double integral = 0;
+        for ( size_t i = 0; i < nodes.size(); ++i )
+        {
+          const double d = 0.5 * bandwidth * ( nodes[i] + 1.0 );
+          integral += 0.5 * bandwidth * weights[i] * calculateKernelValue( d, bandwidth, shape, QgsKernelDensityEstimation::OutputValues::Scaled ) * 2.0 * M_PI * d;
+        }
+        const double obs = QgsSanitizer::seen( "QG-KDE-001", integral );
+        QgsSanitizer::check( "QG-KDE-001", !( std::fabs( obs - 1.0 ) <= 1e-9 ), "kernel shape " + std::to_string( static_cast<int>( shape ) ) + " bandwidth " + QgsSanitizer::num( bandwidth ) + " integrates to " + QgsSanitizer::num( obs ) );
+      } );
+      if ( mDecay <= 1.0 )
+        QgsSanitizer::run( "QG-KDE-002", [&] {
+          // a density kernel is non-negative and non-increasing in distance on [0, bandwidth]
+          double prev = 0;
+          bool bad = false;
+          for ( int i = 0; i <= 16; ++i )
+          {
+            double v = calculateKernelValue( bandwidth * i / 16.0, bandwidth, shape, QgsKernelDensityEstimation::OutputValues::Scaled );
+            if ( i == 1 && QgsSanitizer::fault( "QG-KDE-002" ) )
+              v = 2.0 * prev + 1.0 / ( bandwidth * bandwidth );
+            bad = bad || !( v >= 0 ) || ( i > 0 && v > prev * ( 1 + 64 * QgsSanitizer::EPS ) );
+            prev = v;
+          }
+          QgsSanitizer::check( "QG-KDE-002", bad, "kernel shape " + std::to_string( static_cast<int>( shape ) ) + " bandwidth " + QgsSanitizer::num( bandwidth ) + " is negative or increases with distance" );
+        } );
+    }
+  }
+
   switch ( shape )
   {
     case QgsKernelDensityEstimation::KernelShape::Triangular:

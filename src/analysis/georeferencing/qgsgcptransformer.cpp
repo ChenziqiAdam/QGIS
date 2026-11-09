@@ -15,6 +15,7 @@
 
 #include "qgsgcptransformer.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <gdal.h>
@@ -22,6 +23,7 @@
 #include <limits>
 
 #include "qgsleastsquares.h"
+#include "qgssanitizer.h"
 
 #include "moc_qgsgcptransformer.cpp"
 
@@ -34,11 +36,49 @@ bool QgsGcpTransformerInterface::transform( double &x, double &y, bool inverseTr
 
   double z = 0.0;
   int success = 0;
+  const double inX = x, inY = y;
 
   // Call GDAL transform function
   ( *t )( GDALTransformerArgs(), inverseTransform ? 1 : 0, 1, &x, &y, &z, &success );
   if ( !success )
     return false;
+
+  QgsSanitizer::run( "QG-GCP-001", [&] {
+    // transforming a point and transforming the result back must return the point (linear and Helmert fits)
+    double cond = 1, sMin = 1, sMax = 1, ox = 0, oy = 0;
+    if ( const QgsLinearGeorefTransform *lin = dynamic_cast<const QgsLinearGeorefTransform *>( this ) )
+    {
+      QgsPointXY o;
+      double sx, sy;
+      lin->getOriginScale( o, sx, sy );
+      sMin = std::min( std::fabs( sx ), std::fabs( sy ) );
+      sMax = std::max( std::fabs( sx ), std::fabs( sy ) );
+      ox = o.x();
+      oy = o.y();
+      cond = sMax / sMin;
+    }
+    else if ( const QgsHelmertGeorefTransform *helm = dynamic_cast<const QgsHelmertGeorefTransform *>( this ) )
+    {
+      QgsPointXY o;
+      double s, rot;
+      helm->getOriginScaleRotation( o, s, rot );
+      sMin = sMax = std::fabs( s );
+      ox = o.x();
+      oy = o.y();
+    }
+    else
+      return;
+    if ( !( sMin > 1024 * std::numeric_limits<double>::epsilon() ) || !std::isfinite( cond ) || !std::isfinite( inX ) || !std::isfinite( inY ) || !std::isfinite( x ) || !std::isfinite( y ) )
+      return;
+    double bx = x, by = y, bz = 0.0;
+    int ok = 0;
+    ( *t )( GDALTransformerArgs(), inverseTransform ? 0 : 1, 1, &bx, &by, &bz, &ok );
+    if ( !ok )
+      return;
+    const double err = std::hypot( QgsSanitizer::seen( "QG-GCP-001", bx ) - inX, by - inY );
+    const double mag = std::hypot( inX, inY ) + std::hypot( x, y ) + std::hypot( ox, oy );
+    QgsSanitizer::check( "QG-GCP-001", err > 1e3 * QgsSanitizer::EPS * cond * mag * std::max( 1.0, sMax ) / std::min( 1.0, sMin ), "round trip error " + QgsSanitizer::num( err ) + " for point (" + QgsSanitizer::num( inX ) + "," + QgsSanitizer::num( inY ) + ")" );
+  } );
 
   return true;
 }

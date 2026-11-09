@@ -16,6 +16,10 @@ email                : loic dot bartoletti at oslandia dot com
 #include "qgsgeometryutils_base.h"
 
 #include "qgsexception.h"
+#include "qgssanitizer.h"
+
+#include <algorithm>
+#include <cmath>
 #include "qgsvector.h"
 #include "qgsvector3d.h"
 
@@ -171,7 +175,7 @@ bool QgsGeometryUtilsBase::angleOnCircle( double angle, double angle1, double an
   return circleAngleBetween( angle, angle1, angle3, clockwise );
 }
 
-void QgsGeometryUtilsBase::circleCenterRadius( double x1, double y1, double x2, double y2, double x3, double y3, double &radius, double &centerX, double &centerY )
+static void circleCenterRadiusImpl( double x1, double y1, double x2, double y2, double x3, double y3, double &radius, double &centerX, double &centerY )
 {
   double dx21, dy21, dx31, dy31, h21, h31, d;
 
@@ -207,6 +211,27 @@ void QgsGeometryUtilsBase::circleCenterRadius( double x1, double y1, double x2, 
   centerX = x1 + ( h21 * dy31 - h31 * dy21 ) / d;
   centerY = y1 - ( h21 * dx31 - h31 * dx21 ) / d;
   radius = std::sqrt( std::pow( centerX - x1, 2.0 ) + std::pow( centerY - y1, 2.0 ) );
+}
+
+void QgsGeometryUtilsBase::circleCenterRadius( double x1, double y1, double x2, double y2, double x3, double y3, double &radius, double &centerX, double &centerY )
+{
+  circleCenterRadiusImpl( x1, y1, x2, y2, x3, y3, radius, centerX, centerY );
+  QgsSanitizer::run( "QG-GEO-001", [&] {
+    if ( !( radius > 0 ) || !std::isfinite( radius ) || !std::isfinite( centerX ) || !std::isfinite( centerY ) )
+      return;
+    const double a = std::hypot( x2 - x3, y2 - y3 ), b = std::hypot( x1 - x3, y1 - y3 ), c = std::hypot( x1 - x2, y1 - y2 );
+    const double cross = std::fabs( ( x2 - x1 ) * ( y3 - y1 ) - ( x3 - x1 ) * ( y2 - y1 ) );
+    // precondition: no vertex angle with sine below 1e-3 (not nearly collinear)
+    if ( !( a > 0 && b > 0 && c > 0 ) || cross / ( c * b ) < 1e-3 || cross / ( c * a ) < 1e-3 || cross / ( a * b ) < 1e-3 )
+      return;
+    const double r = QgsSanitizer::seen( "QG-GEO-001", radius );
+    double worst = 0;
+    const double xs[3] = { x1, x2, x3 }, ys[3] = { y1, y2, y3 };
+    for ( int i = 0; i < 3; ++i )
+      worst = std::max( worst, std::fabs( std::hypot( centerX - xs[i], centerY - ys[i] ) - r ) );
+    const double scale = std::fabs( centerX ) + std::fabs( centerY ) + r + std::max( { std::fabs( x1 ), std::fabs( y1 ), std::fabs( x2 ), std::fabs( y2 ), std::fabs( x3 ), std::fabs( y3 ) } );
+    QgsSanitizer::check( "QG-GEO-001", worst > 64 * QgsSanitizer::EPS * scale / 1e-3, "center not equidistant: max deviation " + QgsSanitizer::num( worst ) + " at radius " + QgsSanitizer::num( r ) );
+  } );
 }
 
 double QgsGeometryUtilsBase::circleLength( double x1, double y1, double x2, double y2, double x3, double y3 )
@@ -563,7 +588,7 @@ bool QgsGeometryUtilsBase::skewLinesProjection( const QgsVector3D &P1, const Qgs
   return true;
 }
 
-bool QgsGeometryUtilsBase::lineIntersection( double p1x, double p1y, QgsVector v1, double p2x, double p2y, QgsVector v2, double &intersectionX, double &intersectionY )
+static bool lineIntersectionImpl( double p1x, double p1y, QgsVector v1, double p2x, double p2y, QgsVector v2, double &intersectionX, double &intersectionY )
 {
   const double d = v1.y() * v2.x() - v1.x() * v2.y();
 
@@ -578,6 +603,28 @@ bool QgsGeometryUtilsBase::lineIntersection( double p1x, double p1y, QgsVector v
   intersectionY = p1y + v1.y() * k;
 
   return true;
+}
+
+bool QgsGeometryUtilsBase::lineIntersection( double p1x, double p1y, QgsVector v1, double p2x, double p2y, QgsVector v2, double &intersectionX, double &intersectionY )
+{
+  const bool ok = lineIntersectionImpl( p1x, p1y, v1, p2x, p2y, v2, intersectionX, intersectionY );
+  if ( ok )
+  {
+    QgsSanitizer::run( "QG-GEO-008", [&] {
+      const double n1 = std::hypot( v1.x(), v1.y() ), n2 = std::hypot( v2.x(), v2.y() );
+      if ( !( n1 > 0 && n2 > 0 && std::isfinite( n1 ) && std::isfinite( n2 ) && std::isfinite( intersectionX ) && std::isfinite( intersectionY ) ) )
+        return;
+      const double sinAngle = std::fabs( v1.y() * v2.x() - v1.x() * v2.y() ) / ( n1 * n2 );
+      if ( !( sinAngle > 1e-6 ) )
+        return;
+      const double r1 = std::fabs( ( intersectionX - p1x ) * v1.y() - ( intersectionY - p1y ) * v1.x() ) / n1;
+      const double r2 = std::fabs( ( intersectionX - p2x ) * v2.y() - ( intersectionY - p2y ) * v2.x() ) / n2;
+      const double worst = QgsSanitizer::seen( "QG-GEO-008", std::max( r1, r2 ) );
+      const double scale = std::fabs( intersectionX ) + std::fabs( intersectionY ) + std::fabs( p1x ) + std::fabs( p1y ) + std::fabs( p2x ) + std::fabs( p2y );
+      QgsSanitizer::check( "QG-GEO-008", worst > 1e3 * QgsSanitizer::EPS * scale / sinAngle, "intersection is " + QgsSanitizer::num( worst ) + " off a line" );
+    } );
+  }
+  return ok;
 }
 
 bool QgsGeometryUtilsBase::intersectionPointOfLinesByBearing( double x1, double y1, double bearing1, double x2, double y2, double bearing2, double &intersectionX, double &intersectionY )
@@ -811,6 +858,9 @@ void QgsGeometryUtilsBase::project( double aX, double aY, double aZ, double dist
   resultX = aX + dx;
   resultY = aY + dy;
   resultZ = aZ + dz;
+
+  if ( qgsDoubleNear( inclination, 90.0 ) )
+    QgsSanitizer::checkProject( aX, aY, resultX, resultY, distance, azimuth );
 }
 
 bool QgsGeometryUtilsBase::bisector( double aX, double aY, double bX, double bY, double cX, double cY, double &pointX, double &pointY )

@@ -17,6 +17,7 @@
 #include "qgsunittypes.h"
 
 #include "qgis.h"
+#include "qgssanitizer.h"
 
 #include <QString>
 
@@ -865,7 +866,7 @@ constexpr double distanceUnitToMeter( Qgis::DistanceUnit unit )
   return 1;
 }
 
-double QgsUnitTypes::fromUnitToUnitFactor( Qgis::DistanceUnit fromUnit, Qgis::DistanceUnit toUnit )
+static double distanceFactorImpl( Qgis::DistanceUnit fromUnit, Qgis::DistanceUnit toUnit )
 {
   if ( fromUnit == toUnit || fromUnit == Qgis::DistanceUnit::Unknown || toUnit == Qgis::DistanceUnit::Unknown )
     return 1.0;
@@ -927,6 +928,21 @@ double QgsUnitTypes::fromUnitToUnitFactor( Qgis::DistanceUnit fromUnit, Qgis::Di
   }
 
   return distanceUnitToMeter( fromUnit ) / distanceUnitToMeter( toUnit );
+}
+
+double QgsUnitTypes::fromUnitToUnitFactor( Qgis::DistanceUnit fromUnit, Qgis::DistanceUnit toUnit )
+{
+  const double f = distanceFactorImpl( fromUnit, toUnit );
+  QgsSanitizer::run( "QG-UNIT-001", [&] {
+    const auto fixedLength = []( Qgis::DistanceUnit u ) { return u != Qgis::DistanceUnit::Unknown && u != Qgis::DistanceUnit::Degrees; };
+    if ( !fixedLength( fromUnit ) || !fixedLength( toUnit ) )
+      return;
+    const double viaMeters = distanceFactorImpl( fromUnit, Qgis::DistanceUnit::Meters ) * distanceFactorImpl( Qgis::DistanceUnit::Meters, toUnit );
+    const double inverse = distanceFactorImpl( toUnit, fromUnit );
+    const double obs = QgsSanitizer::seen( "QG-UNIT-001", f );
+    QgsSanitizer::check( "QG-UNIT-001", std::fabs( obs / viaMeters - 1.0 ) > 8 * QgsSanitizer::EPS || std::fabs( obs * inverse - 1.0 ) > 8 * QgsSanitizer::EPS, "factor " + QgsSanitizer::num( obs ) + " via meters " + QgsSanitizer::num( viaMeters ) + " inverse " + QgsSanitizer::num( inverse ) );
+  } );
+  return f;
 }
 
 QString QgsUnitTypes::encodeUnit( Qgis::AreaUnit unit )
@@ -1110,7 +1126,7 @@ Qgis::AreaUnit QgsUnitTypes::stringToAreaUnit( const QString &string, bool *ok )
   return Qgis::AreaUnit::Unknown;
 }
 
-double QgsUnitTypes::fromUnitToUnitFactor( Qgis::AreaUnit fromUnit, Qgis::AreaUnit toUnit )
+static double areaFactorImpl( Qgis::AreaUnit fromUnit, Qgis::AreaUnit toUnit )
 {
 #define KM2_TO_M2 1000000.0
 #define CM2_TO_M2 0.0001
@@ -1545,6 +1561,36 @@ double QgsUnitTypes::fromUnitToUnitFactor( Qgis::AreaUnit fromUnit, Qgis::AreaUn
       break;
   }
   return 1.0;
+}
+
+double QgsUnitTypes::fromUnitToUnitFactor( Qgis::AreaUnit fromUnit, Qgis::AreaUnit toUnit )
+{
+  const double f = areaFactorImpl( fromUnit, toUnit );
+  QgsSanitizer::run( "QG-UNIT-002", [&] {
+    // area units that are the square of a fixed-length unit
+    const auto len = []( Qgis::AreaUnit u, Qgis::DistanceUnit &out ) {
+      switch ( u )
+      {
+        case Qgis::AreaUnit::SquareMeters: out = Qgis::DistanceUnit::Meters; return true;
+        case Qgis::AreaUnit::SquareKilometers: out = Qgis::DistanceUnit::Kilometers; return true;
+        case Qgis::AreaUnit::SquareFeet: out = Qgis::DistanceUnit::Feet; return true;
+        case Qgis::AreaUnit::SquareYards: out = Qgis::DistanceUnit::Yards; return true;
+        case Qgis::AreaUnit::SquareMiles: out = Qgis::DistanceUnit::Miles; return true;
+        case Qgis::AreaUnit::SquareCentimeters: out = Qgis::DistanceUnit::Centimeters; return true;
+        case Qgis::AreaUnit::SquareMillimeters: out = Qgis::DistanceUnit::Millimeters; return true;
+        case Qgis::AreaUnit::SquareInches: out = Qgis::DistanceUnit::Inches; return true;
+        case Qgis::AreaUnit::SquareNauticalMiles: out = Qgis::DistanceUnit::NauticalMiles; return true;
+        default: return false;
+      }
+    };
+    Qgis::DistanceUnit a, b;
+    if ( !len( fromUnit, a ) || !len( toUnit, b ) )
+      return;
+    const double lf = distanceFactorImpl( a, b );
+    const double obs = QgsSanitizer::seen( "QG-UNIT-002", f );
+    QgsSanitizer::check( "QG-UNIT-002", std::fabs( obs / ( lf * lf ) - 1.0 ) > 16 * QgsSanitizer::EPS, "area factor " + QgsSanitizer::num( obs ) + " vs length factor squared " + QgsSanitizer::num( lf * lf ) );
+  } );
+  return f;
 }
 
 Qgis::AreaUnit QgsUnitTypes::distanceToAreaUnit( Qgis::DistanceUnit distanceUnit )

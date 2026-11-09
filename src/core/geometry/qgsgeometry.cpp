@@ -37,6 +37,7 @@ email                : morb at ozemail dot com dot au
 #include "qgsmultilinestring.h"
 #include "qgsmultipoint.h"
 #include "qgsmultipolygon.h"
+#include "qgssanitizer.h"
 #include "qgsnurbsutils.h"
 #include "qgspoint.h"
 #include "qgspointxy.h"
@@ -2710,7 +2711,20 @@ QgsGeometry QgsGeometry::buffer( double distance, int segments, QgsFeedback *fee
     result.mLastError = mLastError;
     return result;
   }
-  return QgsGeometry( std::move( geom ) );
+  QgsGeometry out( std::move( geom ) );
+
+  QgsSanitizer::run( "QG-GEO-006", [&] {
+    if ( !( distance > 0 ) || !std::isfinite( distance ) || segments < 8 || type() != Qgis::GeometryType::Polygon || out.isNull() || out.isEmpty() || !isGeosValid() )
+      return;
+    const double src = area();
+    const double a1 = out.area() * ( QgsSanitizer::fault( "QG-GEO-006" ) ? 1e3 : 1.0 );
+    const QgsGeometry wider = buffer( 2 * distance, segments, feedback );
+    if ( wider.isNull() || wider.isEmpty() )
+      return;
+    const double a2 = wider.area();
+    QgsSanitizer::check( "QG-GEO-006", a2 < a1 * ( 1 - 1e-9 ) || a1 < src * ( 1 - 1e-9 ), "buffer(d) area " + QgsSanitizer::num( a1 ) + ", buffer(2d) area " + QgsSanitizer::num( a2 ) + ", source area " + QgsSanitizer::num( src ) );
+  } );
+  return out;
 }
 
 QgsGeometry QgsGeometry::buffer( double distance, int segments, Qgis::EndCapStyle endCapStyle, Qgis::JoinStyle joinStyle, double miterLimit, QgsFeedback *feedback ) const
@@ -2948,6 +2962,44 @@ QgsGeometry QgsGeometry::centroid() const
   mLastError.clear();
   QgsGeometry result( geos.centroid( &mLastError ) );
   result.mLastError = mLastError;
+
+  QgsSanitizer::run( "QG-GEO-004", [&] {
+    const QgsMultiPolygon *mp = qgsgeometry_cast<const QgsMultiPolygon *>( d->geometry.get() );
+    if ( !mp || mp->numGeometries() < 2 || mp->numGeometries() > 20 || result.isNull() || result.isEmpty() || QgsWkbTypes::flatType( result.wkbType() ) != Qgis::WkbType::Point )
+      return;
+    std::vector<QgsGeometry> parts;
+    for ( int i = 0; i < mp->numGeometries(); ++i )
+    {
+      QgsGeometry g( mp->geometryN( i )->clone() );
+      if ( !g.isGeosValid() || !( g.area() > 0 ) )
+        return;
+      parts.push_back( g );
+    }
+    for ( size_t i = 0; i < parts.size(); ++i )
+      for ( size_t j = i + 1; j < parts.size(); ++j )
+        if ( parts[i].intersects( parts[j] ) )
+          return;
+    double sumA = 0, cx = 0, cy = 0;
+    for ( const QgsGeometry &g : parts )
+    {
+      const QgsGeometry c = g.centroid();
+      if ( c.isNull() || c.isEmpty() )
+        return;
+      const QgsPointXY cp = c.asPoint();
+      const double a = g.area();
+      sumA += a;
+      cx += a * cp.x();
+      cy += a * cp.y();
+    }
+    cx /= sumA;
+    cy /= sumA;
+    const QgsPointXY obs = result.asPoint();
+    const double ox = QgsSanitizer::seen( "QG-GEO-004", obs.x() );
+    const QgsRectangle bb = d->geometry->boundingBox();
+    const double extent = std::max( bb.width(), bb.height() );
+    const double tol = 1e-9 * extent + 64 * QgsSanitizer::EPS * ( std::fabs( cx ) + std::fabs( cy ) + extent );
+    QgsSanitizer::check( "QG-GEO-004", std::hypot( ox - cx, obs.y() - cy ) > tol, "centroid (" + QgsSanitizer::num( ox ) + "," + QgsSanitizer::num( obs.y() ) + ") vs area-weighted (" + QgsSanitizer::num( cx ) + "," + QgsSanitizer::num( cy ) + ")" );
+  } );
   return result;
 }
 

@@ -16,6 +16,7 @@
  ***************************************************************************/
 
 #include "qgstininterpolator.h"
+#include "qgssanitizer.h"
 
 #include "CloughTocherInterpolator.h"
 #include "LinTriangleInterpolator.h"
@@ -63,6 +64,63 @@ int QgsTinInterpolator::interpolatePoint( double x, double y, double &result, Qg
     return 2;
   }
   result = r.z();
+
+  QgsSanitizer::run( "QG-INT-003", [&] {
+    // piecewise-linear interpolation must reproduce a plane exactly
+    if ( mInterpolation != QgsTinInterpolator::TinInterpolation::Linear || !mTriangulation || !std::isfinite( result ) )
+      return;
+    const int n = mTriangulation->pointsCount();
+    if ( n < 3 || n > 5000 )
+      return;
+    long double mx = 0, my = 0, mz = 0;
+    for ( int i = 0; i < n; ++i )
+    {
+      const QgsPoint *p = mTriangulation->point( i );
+      if ( !p || !std::isfinite( p->x() ) || !std::isfinite( p->y() ) || !std::isfinite( p->z() ) )
+        return;
+      mx += p->x();
+      my += p->y();
+      mz += p->z();
+    }
+    mx /= n;
+    my /= n;
+    mz /= n;
+    long double sxx = 0, sxy = 0, syy = 0, sxz = 0, syz = 0;
+    double zAbs = 0, coordAbs = 0;
+    double xmin = 1e300, xmax = -1e300, ymin = 1e300, ymax = -1e300;
+    for ( int i = 0; i < n; ++i )
+    {
+      const QgsPoint *p = mTriangulation->point( i );
+      const long double dx = p->x() - mx, dy = p->y() - my, dz = p->z() - mz;
+      sxx += dx * dx;
+      sxy += dx * dy;
+      syy += dy * dy;
+      sxz += dx * dz;
+      syz += dy * dz;
+      zAbs = std::max( zAbs, std::fabs( p->z() ) );
+      coordAbs = std::max( { coordAbs, std::fabs( p->x() ), std::fabs( p->y() ) } );
+      xmin = std::min( xmin, p->x() );
+      xmax = std::max( xmax, p->x() );
+      ymin = std::min( ymin, p->y() );
+      ymax = std::max( ymax, p->y() );
+    }
+    const long double det = sxx * syy - sxy * sxy;
+    if ( !( det > 1e-12L * ( sxx + syy ) * ( sxx + syy ) ) )
+      return; // collinear or degenerate sample
+    const double a = static_cast<double>( ( sxz * syy - syz * sxy ) / det );
+    const double b = static_cast<double>( ( syz * sxx - sxz * sxy ) / det );
+    const double extent = std::max( xmax - xmin, ymax - ymin );
+    const double scale = zAbs + ( std::fabs( a ) + std::fabs( b ) ) * ( coordAbs + extent );
+    for ( int i = 0; i < n; ++i )
+    {
+      const QgsPoint *p = mTriangulation->point( i );
+      if ( std::fabs( p->z() - static_cast<double>( mz + a * ( p->x() - mx ) + b * ( p->y() - my ) ) ) > 64 * QgsSanitizer::EPS * scale )
+        return; // data are not planar
+    }
+    const double expected = static_cast<double>( mz + a * ( x - mx ) + b * ( y - my ) );
+    const double v = QgsSanitizer::seen( "QG-INT-003", result );
+    QgsSanitizer::check( "QG-INT-003", std::fabs( v - expected ) > 1e3 * QgsSanitizer::EPS * scale, "TIN value " + QgsSanitizer::num( v ) + " vs plane " + QgsSanitizer::num( expected ) );
+  } );
   return 0;
 }
 

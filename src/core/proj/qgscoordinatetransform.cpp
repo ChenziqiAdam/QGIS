@@ -23,6 +23,8 @@
 #include "qgslogger.h"
 #include "qgsmessagelog.h"
 #include "qgspointxy.h"
+#include "qgssanitizer.h"
+#include "qgsunittypes.h"
 #include "qgsproject.h"
 #include "qgsreadwritelocker.h"
 #include "qgsrectangle.h"
@@ -320,7 +322,68 @@ QgsPointXY QgsCoordinateTransform::transform( const QgsPointXY &point, Qgis::Tra
     throw;
   }
 
-  return QgsPointXY( x, y );
+  const QgsPointXY result( x, y );
+
+  QgsSanitizer::run( "QG-CRS-001", [&] {
+    // forward then reverse transformation returns the original coordinates
+    const bool forward = direction == Qgis::TransformDirection::Forward;
+    const QgsCoordinateReferenceSystem &inCrs = forward ? d->mSourceCRS : d->mDestCRS;
+    const QgsCoordinateReferenceSystem &outCrs = forward ? d->mDestCRS : d->mSourceCRS;
+    const auto planar = []( const QgsCoordinateReferenceSystem &c ) { return c.type() == Qgis::CrsType::Geographic2d || c.type() == Qgis::CrsType::Projected; };
+    if ( !planar( inCrs ) || !planar( outCrs ) || d->mProjCoordinateOperation.contains( u"grid"_s, Qt::CaseInsensitive ) || d->mProjCoordinateOperation.contains( u"deformation"_s, Qt::CaseInsensitive ) )
+      return;
+    if ( !std::isfinite( point.x() ) || !std::isfinite( point.y() ) || !std::isfinite( result.x() ) || !std::isfinite( result.y() ) )
+      return;
+    // area of use and singularity gates, evaluated in longitude/latitude of the input point
+    double lon = point.x(), lat = point.y();
+    if ( !inCrs.isGeographic() )
+    {
+      try
+      {
+        const QgsCoordinateTransform toGeographic( inCrs, QgsCoordinateReferenceSystem( u"EPSG:4326"_s ), QgsCoordinateTransformContext() );
+        const QgsPointXY g = toGeographic.transform( point );
+        lon = g.x();
+        lat = g.y();
+      }
+      catch ( const QgsCsException & )
+      {
+        return;
+      }
+    }
+    if ( !std::isfinite( lon ) || !std::isfinite( lat ) || std::fabs( lat ) > 88 || std::fabs( lon ) > 179 )
+      return;
+    for ( const QgsCoordinateReferenceSystem *c : { &inCrs, &outCrs } )
+    {
+      const QgsRectangle b = c->bounds();
+      if ( b.isNull() || b.isEmpty() || !b.contains( QgsPointXY( lon, lat ) ) )
+        return;
+    }
+    QgsPointXY back;
+    try
+    {
+      back = transform( result, forward ? Qgis::TransformDirection::Reverse : Qgis::TransformDirection::Forward );
+    }
+    catch ( const QgsCsException & )
+    {
+      return;
+    }
+    double dx = back.x() - point.x(), dy = back.y() - point.y(), dxm, dym;
+    if ( inCrs.isGeographic() )
+    {
+      dx -= 360.0 * std::round( dx / 360.0 );
+      dxm = dx * 111319.49 * std::cos( lat * M_PI / 180.0 );
+      dym = dy * 111319.49;
+    }
+    else
+    {
+      const double f = QgsUnitTypes::fromUnitToUnitFactor( inCrs.mapUnits(), Qgis::DistanceUnit::Meters );
+      dxm = dx * f;
+      dym = dy * f;
+    }
+    const double err = QgsSanitizer::seen( "QG-CRS-001", std::hypot( dxm, dym ) );
+    QgsSanitizer::check( "QG-CRS-001", !( err <= 1e-3 ), "round trip " + inCrs.authid().toStdString() + " -> " + outCrs.authid().toStdString() + " moves the point by " + QgsSanitizer::num( err ) + " m" );
+  } );
+  return result;
 }
 
 
@@ -584,6 +647,7 @@ void QgsCoordinateTransform::transformInPlace( QVector<float> &x, QVector<float>
 
 QgsRectangle QgsCoordinateTransform::transformBoundingBox( const QgsRectangle &rect, Qgis::TransformDirection direction, const bool handle180Crossover ) const
 {
+  const QgsRectangle out = [&]() -> QgsRectangle {
   // Calculate the bounding box of a QgsRectangle in the source CRS
   // when projected to the destination CRS (or the inverse).
   // This is done by looking at a number of points spread evenly
@@ -927,6 +991,46 @@ QgsRectangle QgsCoordinateTransform::transformBoundingBox( const QgsRectangle &r
 #if PROJ_VERSION_MAJOR < 9 || ( PROJ_VERSION_MAJOR == 9 && PROJ_VERSION_MINOR < 7 )
   return legacyImplementation();
 #endif
+}();
+
+  QgsSanitizer::run( "QG-CRS-002", [&] {
+    // the transformed bounding box must enclose the transformed corners and edge midpoints
+    if ( !d->mIsValid || d->mShortCircuit || rect.isEmpty() || out.isNull() || out.isEmpty() || !std::isfinite( out.xMinimum() ) || !std::isfinite( out.xMaximum() ) || !std::isfinite( out.yMinimum() ) || !std::isfinite( out.yMaximum() ) )
+      return;
+    if ( out.xMinimum() > out.xMaximum() )
+      return; // antimeridian-crossing result
+    const bool destGeographic = direction == Qgis::TransformDirection::Forward ? d->mDestCRS.isGeographic() : d->mSourceCRS.isGeographic();
+    const bool srcGeographic = direction == Qgis::TransformDirection::Forward ? d->mSourceCRS.isGeographic() : d->mDestCRS.isGeographic();
+    if ( destGeographic && out.width() > 180 )
+      return; // wrap-around risk
+    if ( srcGeographic && ( std::fabs( rect.yMinimum() ) >= 89 || std::fabs( rect.yMaximum() ) >= 89 || rect.width() >= 180 ) )
+      return;
+    const double xs[3] = { rect.xMinimum(), 0.5 * ( rect.xMinimum() + rect.xMaximum() ), rect.xMaximum() };
+    const double ys[3] = { rect.yMinimum(), 0.5 * ( rect.yMinimum() + rect.yMaximum() ), rect.yMaximum() };
+    const double size = std::max( out.width(), out.height() );
+    const double tol = 1e-9 * size;
+    for ( int i = 0; i < 3; ++i )
+      for ( int j = 0; j < 3; ++j )
+      {
+        if ( i == 1 && j == 1 )
+          continue; // interior point: not part of the boundary law
+        QgsPointXY q;
+        try
+        {
+          q = transform( QgsPointXY( xs[i], ys[j] ), direction );
+        }
+        catch ( const QgsCsException & )
+        {
+          return;
+        }
+        if ( !std::isfinite( q.x() ) || !std::isfinite( q.y() ) )
+          return;
+        const double shrink = QgsSanitizer::fault( "QG-CRS-002" ) ? 0.25 * size : 0.0;
+        const bool outside = q.x() < out.xMinimum() + shrink - tol || q.x() > out.xMaximum() - shrink + tol || q.y() < out.yMinimum() + shrink - tol || q.y() > out.yMaximum() - shrink + tol;
+        QgsSanitizer::check( "QG-CRS-002", outside, "transformed sample (" + QgsSanitizer::num( q.x() ) + "," + QgsSanitizer::num( q.y() ) + ") lies outside the transformed box" );
+      }
+  } );
+  return out;
 }
 
 void QgsCoordinateTransform::transformCoords( int numPoints, double *x, double *y, double *z, Qgis::TransformDirection direction ) const

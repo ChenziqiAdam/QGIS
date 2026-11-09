@@ -33,11 +33,30 @@
 #include "qgsmultisurface.h"
 #include "qgspointxy.h"
 #include "qgspolygon.h"
+#include "qgssanitizer.h"
 #include "qgssurface.h"
 #include "qgsunittypes.h"
 
 #include <QObject>
 #include <QString>
+
+#include <algorithm>
+#include <array>
+#include <vector>
+
+namespace
+{
+  // geocentric Cartesian coordinates (metres) of a point on the ellipsoid surface
+  void sanitizerEcef( double a, double e2, double latDeg, double lonDeg, double xyz[3] )
+  {
+    const double lat = latDeg * M_PI / 180.0, lon = lonDeg * M_PI / 180.0;
+    const double s = std::sin( lat ), c = std::cos( lat );
+    const double n = a / std::sqrt( 1.0 - e2 * s * s );
+    xyz[0] = n * c * std::cos( lon );
+    xyz[1] = n * c * std::sin( lon );
+    xyz[2] = n * ( 1.0 - e2 ) * s;
+  }
+} // namespace
 
 using namespace Qt::StringLiterals;
 
@@ -438,6 +457,26 @@ double QgsDistanceArea::measureLine( const QgsPointXY &p1, const QgsPointXY &p2 
   {
     QgsDebugMsgLevel( u"Cartesian calculation on canvas coordinates"_s, 4 );
     result = p2.distance( p1 );
+  }
+
+  if ( QgsSanitizer::enabled() && willUseEllipsoid() )
+  {
+    QgsSanitizer::run( "QG-DST-001", [&] {
+      const double d = QgsSanitizer::seen( "QG-DST-001", result );
+      const double dRev = measureLine( p2, p1 );
+      if ( std::isfinite( d ) && std::isfinite( dRev ) )
+        QgsSanitizer::check( "QG-DST-001", std::fabs( d - dRev ) > 1e-7 + 1e-12 * d, "d(p1,p2)=" + QgsSanitizer::num( d ) + " d(p2,p1)=" + QgsSanitizer::num( dRev ) );
+    } );
+    QgsSanitizer::run( "QG-DST-002", [&] {
+      if ( !( std::isfinite( result ) && std::isfinite( pp1.x() ) && std::isfinite( pp1.y() ) && std::isfinite( pp2.x() ) && std::isfinite( pp2.y() ) ) || std::fabs( pp1.y() ) > 90 || std::fabs( pp2.y() ) > 90 )
+        return;
+      const double e2 = 1.0 - ( mSemiMinor / mSemiMajor ) * ( mSemiMinor / mSemiMajor );
+      double a[3], b[3];
+      sanitizerEcef( mSemiMajor, e2, pp1.y(), pp1.x(), a );
+      sanitizerEcef( mSemiMajor, e2, pp2.y(), pp2.x(), b );
+      const double chord = QgsSanitizer::seen( "QG-DST-002", std::sqrt( ( a[0] - b[0] ) * ( a[0] - b[0] ) + ( a[1] - b[1] ) * ( a[1] - b[1] ) + ( a[2] - b[2] ) * ( a[2] - b[2] ) ) );
+      QgsSanitizer::check( "QG-DST-002", result < chord - 1e-7 - 1e-12 * chord, "geodesic=" + QgsSanitizer::num( result ) + " chord=" + QgsSanitizer::num( chord ) );
+    } );
   }
 
   QgsDebugMsgLevel( u"The result was %1"_s.arg( result ), 3 );
@@ -877,7 +916,46 @@ double QgsDistanceArea::measurePolygon( const QVector<QgsPointXY> &points ) cons
     {
       pts.append( sourceToEllipsoid().transform( *i ) );
     }
-    return computePolygonArea( pts );
+    const double area = computePolygonArea( pts );
+    QgsSanitizer::run( "QG-DST-004", [&] {
+      QVector<QgsPointXY> ring = pts;
+      if ( ring.size() > 1 && ring.first() == ring.last() )
+        ring.removeLast();
+      const int n = ring.size();
+      if ( n < 3 || !std::isfinite( area ) )
+        return;
+      // precondition: all vertices within one hemisphere of their mean direction
+      const double e2 = 1.0 - ( mSemiMinor / mSemiMajor ) * ( mSemiMinor / mSemiMajor );
+      double mean[3] = { 0, 0, 0 };
+      std::vector<std::array<double, 3>> dirs;
+      for ( const QgsPointXY &pt : std::as_const( ring ) )
+      {
+        if ( !std::isfinite( pt.x() ) || !std::isfinite( pt.y() ) || std::fabs( pt.y() ) > 90 )
+          return;
+        double v[3];
+        sanitizerEcef( 1.0, e2, pt.y(), pt.x(), v );
+        const double nv = std::sqrt( v[0] * v[0] + v[1] * v[1] + v[2] * v[2] );
+        dirs.push_back( { v[0] / nv, v[1] / nv, v[2] / nv } );
+        for ( int k = 0; k < 3; ++k )
+          mean[k] += dirs.back()[k];
+      }
+      const double nm = std::sqrt( mean[0] * mean[0] + mean[1] * mean[1] + mean[2] * mean[2] );
+      if ( !( nm > 0 ) )
+        return;
+      for ( const auto &d : dirs )
+        if ( ( d[0] * mean[0] + d[1] * mean[1] + d[2] * mean[2] ) / nm < 0.1 )
+          return;
+      QVector<QgsPointXY> shifted = ring;
+      std::rotate( shifted.begin(), shifted.begin() + n / 2, shifted.end() );
+      QVector<QgsPointXY> reversed = ring;
+      std::reverse( reversed.begin(), reversed.end() );
+      const double a1 = computePolygonArea( shifted );
+      const double a2 = computePolygonArea( reversed );
+      const double obs = QgsSanitizer::seen( "QG-DST-004", area );
+      const double tol = 64 * QgsSanitizer::EPS * mSemiMajor * mSemiMajor + 1e-9 * obs;
+      QgsSanitizer::check( "QG-DST-004", std::fabs( obs - a1 ) > tol || std::fabs( obs - a2 ) > tol, "area=" + QgsSanitizer::num( obs ) + " shifted=" + QgsSanitizer::num( a1 ) + " reversed=" + QgsSanitizer::num( a2 ) );
+    } );
+    return area;
   }
   else
   {
@@ -909,6 +987,20 @@ double QgsDistanceArea::bearing( const QgsPointXY &p1, const QgsPointXY &p2 ) co
     geod_inverse( mGeod.get(), pp1.y(), pp1.x(), pp2.y(), pp2.x(), &distance, &azimuth1, &azimuth2 );
 
     bearing = DEG2RAD( azimuth1 );
+
+    QgsSanitizer::run( "QG-DST-003", [&] {
+      // direct problem must invert the inverse problem (geographic source CRS on the same datum only)
+      if ( !mSourceCrs.isGeographic() || std::fabs( pp1.x() - p1.x() ) > 1e-12 || std::fabs( pp1.y() - p1.y() ) > 1e-12 || std::fabs( pp2.x() - p2.x() ) > 1e-12 || std::fabs( pp2.y() - p2.y() ) > 1e-12 )
+        return;
+      if ( !( distance > 0 ) || distance > 2.0 * M_PI * mSemiMajor / 3.0 || !std::isfinite( bearing ) )
+        return;
+      QgsPointXY q;
+      measureLineProjected( p1, distance, bearing, &q );
+      double back = 0, a1 = 0, a2 = 0;
+      geod_inverse( mGeod.get(), q.y(), q.x(), pp2.y(), pp2.x(), &back, &a1, &a2 );
+      back = QgsSanitizer::seen( "QG-DST-003", back );
+      QgsSanitizer::check( "QG-DST-003", back > 1e-6 + 1e-11 * distance, "projected endpoint misses target by " + QgsSanitizer::num( back ) + " m over " + QgsSanitizer::num( distance ) + " m" );
+    } );
   }
   else //compute simple planar azimuth
   {

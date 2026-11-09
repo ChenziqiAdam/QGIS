@@ -26,6 +26,7 @@
 #include "qgsfeedback.h"
 #include "qgsgeometryutils.h"
 #include "qgslinestring.h"
+#include "qgssanitizer.h"
 #include "qgsmulticurve.h"
 #include "qgspolygon.h"
 #include "qgswkbptr.h"
@@ -483,6 +484,51 @@ double QgsCurvePolygon::area() const
       totalArea -= std::fabs( area );
     }
   }
+
+  QgsSanitizer::run( "QG-GEO-003", [&] {
+    const QgsLineString *ls = qgsgeometry_cast<const QgsLineString *>( mExteriorRing.get() );
+    if ( !ls || ls->numPoints() < 4 || !mExteriorRing->isRing() )
+      return;
+    const int n = ls->numPoints() - 1; // distinct vertices
+    QVector<double> xs, ys;
+    double terms = 0;
+    for ( int i = 0; i < n; ++i )
+    {
+      xs << ls->xAt( i );
+      ys << ls->yAt( i );
+      if ( !std::isfinite( xs.last() ) || !std::isfinite( ys.last() ) )
+        return;
+    }
+    for ( int i = 0; i < n; ++i )
+      terms += std::fabs( xs[i] * ys[( i + 1 ) % n] - xs[( i + 1 ) % n] * ys[i] );
+    double exterior = 0;
+    mExteriorRing->sumUpArea( exterior );
+    exterior = QgsSanitizer::seen( "QG-GEO-003", std::fabs( exterior ) );
+    const auto ringArea = [n]( QVector<double> x, QVector<double> y ) {
+      x << x.first();
+      y << y.first();
+      double s = 0;
+      QgsLineString( x, y ).sumUpArea( s );
+      Q_UNUSED( n )
+      return std::fabs( s );
+    };
+    QVector<double> sx = xs, sy = ys;
+    std::rotate( sx.begin(), sx.begin() + n / 2, sx.end() );
+    std::rotate( sy.begin(), sy.begin() + n / 2, sy.end() );
+    QVector<double> rx( xs.crbegin(), xs.crend() ), ry( ys.crbegin(), ys.crend() );
+    const double tol = 16 * n * QgsSanitizer::EPS * terms;
+    const double a1 = ringArea( sx, sy ), a2 = ringArea( rx, ry );
+    QgsSanitizer::check( "QG-GEO-003", std::fabs( exterior - a1 ) > tol || std::fabs( exterior - a2 ) > tol, "exterior area " + QgsSanitizer::num( exterior ) + " shifted " + QgsSanitizer::num( a1 ) + " reversed " + QgsSanitizer::num( a2 ) );
+  } );
+  QgsSanitizer::run( "QG-GEO-005", [&] {
+    if ( !mExteriorRing || !mExteriorRing->isRing() )
+      return;
+    const double p = mExteriorRing->length();
+    if ( !( p > 0 ) || !std::isfinite( p ) || !std::isfinite( totalArea ) )
+      return;
+    const double a = QgsSanitizer::seen( "QG-GEO-005", totalArea );
+    QgsSanitizer::check( "QG-GEO-005", a > p * p / ( 4.0 * M_PI ) * ( 1 + 1e-9 ), "area " + QgsSanitizer::num( a ) + " exceeds P^2/4pi with P=" + QgsSanitizer::num( p ) );
+  } );
   return totalArea;
 }
 

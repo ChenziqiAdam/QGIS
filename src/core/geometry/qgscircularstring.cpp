@@ -25,6 +25,7 @@
 #include "qgsgeometryutils.h"
 #include "qgsgeometryutils_base.h"
 #include "qgslinestring.h"
+#include "qgssanitizer.h"
 #include "qgspoint.h"
 #include "qgspolygon.h"
 #include "qgsrectangle.h"
@@ -348,6 +349,25 @@ double QgsCircularString::length() const
   {
     length += QgsGeometryUtilsBase::circleLength( mX[i], mY[i], mX[i + 1], mY[i + 1], mX[i + 2], mY[i + 2] );
   }
+
+  QgsSanitizer::run( "QG-GEO-002", [&] {
+    if ( nPoints < 3 || !std::isfinite( length ) )
+      return;
+    for ( int i = 0; i < ( nPoints - 2 ); i += 2 )
+    {
+      double radius = 0, cx = 0, cy = 0;
+      QgsGeometryUtilsBase::circleCenterRadius( mX[i], mY[i], mX[i + 1], mY[i + 1], mX[i + 2], mY[i + 2], radius, cx, cy );
+      if ( !( radius > 0 ) || !std::isfinite( radius ) )
+        return; // straight or degenerate arc: outside the precondition
+    }
+    const double step = M_PI / 180.0;
+    std::unique_ptr<QgsLineString> poly( curveToLine( step, MaximumAngle ) );
+    const double lp = poly ? poly->length() : 0.0;
+    if ( !( lp > 0 ) )
+      return;
+    const double la = QgsSanitizer::seen( "QG-GEO-002", length );
+    QgsSanitizer::check( "QG-GEO-002", la < lp * ( 1 - 1e-12 ) || la > lp * ( 1 + step * step / 24.0 + 1e-9 ), "arc length " + QgsSanitizer::num( la ) + " vs chord polyline " + QgsSanitizer::num( lp ) );
+  } );
   return length;
 }
 
