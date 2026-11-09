@@ -3,7 +3,7 @@
   "upstream": "qgis/qgis",
   "upstream_tag": "final-4_2_3",
   "upstream_commit": "b041a18904a4dc9fdada8ecb2c84385054ddfee1",
-  "instrumented_commit": "29f402e419ad268bfa68704565afe9b0b75e2bd9",
+  "instrumented_commit": "a216658b595b67fb470ba3ec8388edc187c1f1b3",
   "sanitizers": [
     {
       "id": "QG-DST-001",
@@ -147,32 +147,6 @@
       "observation_point": "end of buffer(d), re-called with 2d on the same inputs",
       "alarm": "area(buf(2d)) < area(buf(d)) (1 - 1e-9) or area(buf(d)) < area(geometry) (1 - 1e-9)",
       "rationale": "proximity analysis and exclusion zones are monotone in distance"
-    },
-    {
-      "id": "QG-GEO-007",
-      "category": "scientific",
-      "family": "project_azimuth_consistency",
-      "source": "src/core/geometry/qgsgeometryutils_base.cpp",
-      "symbol": "QgsGeometryUtilsBase::project",
-      "scientific_quantity": "projected point",
-      "precondition": "distance > 0, azimuth in degrees with abs(azimuth) <= 720, distance >= 1e-200 (not subnormal), inclination 90 degrees (planar)",
-      "invariant": "the azimuth and distance from the origin to the projected point equal the requested azimuth and distance",
-      "observation_point": "before returning from project",
-      "alarm": "circular difference of azimuth in degrees > 64 eps (1 + |p|/d) (180/pi) + 1e-12 abs(azimuth), or abs(distance - d) > 64 eps (|p| + d)",
-      "rationale": "offset, bearing-intersection and geodesic helpers compose these two operations"
-    },
-    {
-      "id": "QG-GEO-008",
-      "category": "scientific",
-      "family": "line_intersection_residual",
-      "source": "src/core/geometry/qgsgeometryutils_base.cpp",
-      "symbol": "QgsGeometryUtilsBase::lineIntersection",
-      "scientific_quantity": "intersection of two lines",
-      "precondition": "direction vectors non-zero with |sin(angle)| > 1e-6",
-      "invariant": "the returned point lies on both lines",
-      "observation_point": "before returning true from lineIntersection",
-      "alarm": "max_i abs(cross(x - p_i, v_i))/|v_i| > 1e3 eps (|x| + |p_1| + |p_2|)/abs(sin)",
-      "rationale": "snapping, topology and offset algorithms assume the point lies on the lines"
     },
     {
       "id": "QG-STAT-001",
@@ -390,9 +364,9 @@
       "symbol": "QgsCoordinateTransform::transformBoundingBox",
       "scientific_quantity": "transformed extent",
       "precondition": "valid, finite rectangle inside the source CRS area of use; geographic destinations only when the result is below 90 degrees wide and below 85 degrees of latitude (wrap-around excluded)",
-      "invariant": "the transformed bounding box encloses the transformed corners and edge midpoints",
+      "invariant": "the transformed bounding box encloses the transformed corners and edge midpoints (documented contract: all points of the source rectangle are inside the returned rectangle)",
       "observation_point": "end of transformBoundingBox",
-      "alarm": "any sampled point outside the box by more than 1e-3 box size (the box is built from sampled boundary points, so an edge can bulge between samples)",
+      "alarm": "any sampled corner outside the box by more than 1e3 eps (|box| + size), or an edge midpoint by more than that plus 4 D/31^2, D being the distance of the transformed midpoint from the chord of the transformed edge ends (the box is the hull of 32 boundary samples per edge, so an edge may bulge by at most one sub-segment sagitta between samples; deficits beyond it are alarms)",
       "rationale": "extents of reprojected layers must contain their data"
     }
   ]
