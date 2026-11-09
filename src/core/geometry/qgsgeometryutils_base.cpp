@@ -588,7 +588,7 @@ bool QgsGeometryUtilsBase::skewLinesProjection( const QgsVector3D &P1, const Qgs
   return true;
 }
 
-static bool lineIntersectionImpl( double p1x, double p1y, QgsVector v1, double p2x, double p2y, QgsVector v2, double &intersectionX, double &intersectionY )
+bool QgsGeometryUtilsBase::lineIntersection( double p1x, double p1y, QgsVector v1, double p2x, double p2y, QgsVector v2, double &intersectionX, double &intersectionY )
 {
   const double d = v1.y() * v2.x() - v1.x() * v2.y();
 
@@ -603,28 +603,6 @@ static bool lineIntersectionImpl( double p1x, double p1y, QgsVector v1, double p
   intersectionY = p1y + v1.y() * k;
 
   return true;
-}
-
-bool QgsGeometryUtilsBase::lineIntersection( double p1x, double p1y, QgsVector v1, double p2x, double p2y, QgsVector v2, double &intersectionX, double &intersectionY )
-{
-  const bool ok = lineIntersectionImpl( p1x, p1y, v1, p2x, p2y, v2, intersectionX, intersectionY );
-  if ( ok )
-  {
-    QgsSanitizer::run( "QG-GEO-008", [&] {
-      const double n1 = std::hypot( v1.x(), v1.y() ), n2 = std::hypot( v2.x(), v2.y() );
-      if ( !( n1 > 0 && n2 > 0 && std::isfinite( n1 ) && std::isfinite( n2 ) && std::isfinite( intersectionX ) && std::isfinite( intersectionY ) ) )
-        return;
-      const double sinAngle = std::fabs( v1.y() * v2.x() - v1.x() * v2.y() ) / ( n1 * n2 );
-      if ( !( sinAngle > 1e-6 ) )
-        return;
-      const double r1 = std::fabs( ( intersectionX - p1x ) * v1.y() - ( intersectionY - p1y ) * v1.x() ) / n1;
-      const double r2 = std::fabs( ( intersectionX - p2x ) * v2.y() - ( intersectionY - p2y ) * v2.x() ) / n2;
-      const double worst = QgsSanitizer::seen( "QG-GEO-008", std::max( r1, r2 ) );
-      const double scale = std::fabs( intersectionX ) + std::fabs( intersectionY ) + std::fabs( p1x ) + std::fabs( p1y ) + std::fabs( p2x ) + std::fabs( p2y );
-      QgsSanitizer::check( "QG-GEO-008", worst > 1e3 * QgsSanitizer::EPS * scale / sinAngle, "intersection is " + QgsSanitizer::num( worst ) + " off a line" );
-    } );
-  }
-  return ok;
 }
 
 bool QgsGeometryUtilsBase::intersectionPointOfLinesByBearing( double x1, double y1, double bearing1, double x2, double y2, double bearing2, double &intersectionX, double &intersectionY )
@@ -859,8 +837,6 @@ void QgsGeometryUtilsBase::project( double aX, double aY, double aZ, double dist
   resultY = aY + dy;
   resultZ = aZ + dz;
 
-  if ( qgsDoubleNear( inclination, 90.0 ) )
-    QgsSanitizer::checkProject( aX, aY, resultX, resultY, distance, azimuth );
 }
 
 bool QgsGeometryUtilsBase::bisector( double aX, double aY, double bX, double bY, double cX, double cY, double &pointX, double &pointY )

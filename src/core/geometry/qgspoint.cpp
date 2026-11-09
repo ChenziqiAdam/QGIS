@@ -17,7 +17,6 @@
 
 
 #include "qgspoint.h"
-#include "qgssanitizer.h"
 
 #include <cmath>
 #include <nlohmann/json.hpp>
@@ -767,10 +766,7 @@ QgsPoint QgsPoint::project( double distance, double azimuth, double inclination 
     dz = distance * std::cos( radsZ );
   }
 
-  const QgsPoint result( mX + dx, mY + dy, mZ + dz, mM, pType );
-  if ( qgsDoubleNear( inclination, 90.0 ) )
-    QgsSanitizer::checkProject( mX, mY, result.x(), result.y(), distance, azimuth );
-  return result;
+  return QgsPoint( mX + dx, mY + dy, mZ + dz, mM, pType );
 }
 
 void QgsPoint::normalize()

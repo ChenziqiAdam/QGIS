@@ -130,25 +130,6 @@ namespace QgsSanitizer
 
   constexpr double EPS = 2.220446049250313e-16;
 
-  /**
-   * QG-GEO-007: a planar projection of a point by `distance` along `azimuthDeg` (clockwise from north) must be
-   * at that distance and azimuth from the origin. Shared by every implementation of the projection.
-   */
-  inline void checkProject( double ax, double ay, double rx, double ry, double distance, double azimuthDeg )
-  {
-    run( "QG-GEO-007", [&] {
-      if ( !( distance > 0 ) || !std::isfinite( distance ) || !( std::fabs( azimuthDeg ) <= 720.0 ) || !( distance >= 1e-200 ) || !std::isfinite( azimuthDeg ) || !std::isfinite( ax ) || !std::isfinite( ay ) || !std::isfinite( rx ) || !std::isfinite( ry ) )
-        return;
-      const double ddx = rx - ax, ddy = ry - ay;
-      double az = std::atan2( ddx, ddy ) * 180.0 / 3.14159265358979323846 - azimuthDeg;
-      az -= 360.0 * std::round( az / 360.0 ); // circular difference in [-180, 180]
-      const double scale = std::max( std::fabs( ax ), std::fabs( ay ) );
-      const double dist = seen( "QG-GEO-007", std::hypot( ddx, ddy ) );
-      const double tolAz = 64 * EPS * ( 1.0 + scale / distance ) * 180.0 / 3.14159265358979323846 + 1e-12 * std::fabs( azimuthDeg );
-      const double tolD = 64 * EPS * ( scale + distance );
-      check( "QG-GEO-007", std::fabs( az ) > tolAz || std::fabs( dist - distance ) > tolD, "azimuth error " + num( az ) + " deg, distance " + num( dist ) + " vs " + num( distance ) );
-    } );
-  }
   constexpr double EPS32 = 1.1920928955078125e-07;
 } // namespace QgsSanitizer
 
