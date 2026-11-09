@@ -103,6 +103,8 @@ float QgsDerivativeFilter::calcFirstDerX( float x11, float x21, float x31, float
         b += w[r * 3 + c] * ( 1 - r ) / ( 6.0 * mCellSizeY );
       }
     const double m = QgsTerrainSanitizer::maxAbs( w );
+    if ( !( std::fabs( mZFactor ) >= 1e-30 ) )
+      return; // float32 gradient would be subnormal
     for ( int r = 0; r < 3; ++r )
       for ( int c = 0; c < 3; ++c )
         if ( std::fabs( w[r * 3 + c] - ( mean + a * ( c - 1 ) * mCellSizeX + b * ( 1 - r ) * mCellSizeY ) ) > 8 * QgsSanitizer::EPS32 * m )
@@ -194,6 +196,8 @@ float QgsDerivativeFilter::calcFirstDerY( float x11, float x21, float x31, float
         b += w[r * 3 + c] * ( 1 - r ) / ( 6.0 * mCellSizeY );
       }
     const double m = QgsTerrainSanitizer::maxAbs( w );
+    if ( !( std::fabs( mZFactor ) >= 1e-30 ) )
+      return; // float32 gradient would be subnormal
     for ( int r = 0; r < 3; ++r )
       for ( int c = 0; c < 3; ++c )
         if ( std::fabs( w[r * 3 + c] - ( mean + a * ( c - 1 ) * mCellSizeX + b * ( 1 - r ) * mCellSizeY ) ) > 8 * QgsSanitizer::EPS32 * m )

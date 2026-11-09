@@ -77,6 +77,8 @@ int QgsIDWInterpolator::interpolatePoint( double x, double y, double &result, Qg
       zMin = std::min( zMin, v.z );
       zMax = std::max( zMax, v.z );
       zAbs = std::max( zAbs, std::fabs( v.z ) );
+      if ( v.z != 0 && !( std::fabs( v.z ) >= 1e-280 ) )
+        return false; // subnormal data: products w z lose all precision
     }
     // floating-point range: the implementation sums z / d^p unscaled, which must not overflow double
     if ( !( std::fabs( zAbs ) * std::pow( dMin, -mDistanceCoefficient ) < 1e150 ) )

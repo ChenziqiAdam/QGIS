@@ -330,8 +330,8 @@ QgsPointXY QgsCoordinateTransform::transform( const QgsPointXY &point, Qgis::Tra
     const QgsCoordinateReferenceSystem &inCrs = forward ? d->mSourceCRS : d->mDestCRS;
     const QgsCoordinateReferenceSystem &outCrs = forward ? d->mDestCRS : d->mSourceCRS;
     const auto planar = []( const QgsCoordinateReferenceSystem &c ) { return c.type() == Qgis::CrsType::Geographic2d || c.type() == Qgis::CrsType::Projected; };
-    if ( !planar( inCrs ) || !planar( outCrs ) || d->mProjCoordinateOperation.contains( u"grid"_s, Qt::CaseInsensitive ) || d->mProjCoordinateOperation.contains( u"deformation"_s, Qt::CaseInsensitive ) )
-      return;
+    if ( !planar( inCrs ) || !planar( outCrs ) || d->mProjCoordinateOperation.contains( u"grid"_s, Qt::CaseInsensitive ) || d->mProjCoordinateOperation.contains( u"deformation"_s, Qt::CaseInsensitive ) || d->mProjCoordinateOperation.contains( u"+proj=cass"_s, Qt::CaseInsensitive ) || d->mProjCoordinateOperation.contains( u"proj=cass"_s, Qt::CaseInsensitive ) )
+      return; // Cassini-Soldner folds beyond 90 degrees from the central meridian although its declared area of use is the whole world
     if ( !std::isfinite( point.x() ) || !std::isfinite( point.y() ) || !std::isfinite( result.x() ) || !std::isfinite( result.y() ) )
       return;
     // area of use and singularity gates, evaluated in longitude/latitude of the input point
