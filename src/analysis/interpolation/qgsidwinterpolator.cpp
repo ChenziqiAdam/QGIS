@@ -78,6 +78,9 @@ int QgsIDWInterpolator::interpolatePoint( double x, double y, double &result, Qg
       zMax = std::max( zMax, v.z );
       zAbs = std::max( zAbs, std::fabs( v.z ) );
     }
+    // floating-point range: the implementation sums z / d^p unscaled, which must not overflow double
+    if ( !( std::fabs( zAbs ) * std::pow( dMin, -mDistanceCoefficient ) < 1e150 ) )
+      return false;
     long double num = 0, den = 0;
     for ( const QgsInterpolatorVertexData &v : std::as_const( mCachedBaseData ) )
     {

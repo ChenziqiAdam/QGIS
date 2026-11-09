@@ -2714,8 +2714,8 @@ QgsGeometry QgsGeometry::buffer( double distance, int segments, QgsFeedback *fee
   QgsGeometry out( std::move( geom ) );
 
   QgsSanitizer::run( "QG-GEO-006", [&] {
-    if ( !( distance > 0 ) || !std::isfinite( distance ) || segments < 8 || type() != Qgis::GeometryType::Polygon || out.isNull() || out.isEmpty() || !isGeosValid() )
-      return;
+    if ( !( distance > 0 ) || !std::isfinite( distance ) || segments < 8 || type() != Qgis::GeometryType::Polygon || out.isNull() || out.isEmpty() || d->geometry->hasCurvedSegments() || !isGeosValid() )
+      return; // curves are buffered through a linearisation, whose area lies below the exact curved area by up to the segmentation error
     // distance must be resolvable against the extent and the coordinate rounding (GEOS returns an empty buffer for a vanishing distance)
     const QgsRectangle ext = boundingBox();
     const double extent = std::max( ext.width(), ext.height() );

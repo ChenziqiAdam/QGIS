@@ -459,7 +459,8 @@ double QgsDistanceArea::measureLine( const QgsPointXY &p1, const QgsPointXY &p2 
     result = p2.distance( p1 );
   }
 
-  if ( QgsSanitizer::enabled() && willUseEllipsoid() )
+  // the geodesic solver (series expansion) is specified for |flattening| <= 1/50
+  if ( QgsSanitizer::enabled() && willUseEllipsoid() && std::fabs( 1.0 - mSemiMinor / mSemiMajor ) <= 0.02 )
   {
     QgsSanitizer::run( "QG-DST-001", [&] {
       const double d = QgsSanitizer::seen( "QG-DST-001", result );
@@ -922,7 +923,7 @@ double QgsDistanceArea::measurePolygon( const QVector<QgsPointXY> &points ) cons
       if ( ring.size() > 1 && ring.first() == ring.last() )
         ring.removeLast();
       const int n = ring.size();
-      if ( n < 3 || !std::isfinite( area ) )
+      if ( n < 3 || !std::isfinite( area ) || !( std::fabs( 1.0 - mSemiMinor / mSemiMajor ) <= 0.02 ) )
         return;
       // precondition: all vertices within one hemisphere of their mean direction
       const double e2 = 1.0 - ( mSemiMinor / mSemiMajor ) * ( mSemiMinor / mSemiMajor );
@@ -989,8 +990,8 @@ double QgsDistanceArea::bearing( const QgsPointXY &p1, const QgsPointXY &p2 ) co
     bearing = DEG2RAD( azimuth1 );
 
     QgsSanitizer::run( "QG-DST-003", [&] {
-      // direct problem must invert the inverse problem (geographic source CRS on the same datum only)
-      if ( !mSourceCrs.isGeographic() || std::fabs( pp1.x() - p1.x() ) > 1e-12 || std::fabs( pp1.y() - p1.y() ) > 1e-12 || std::fabs( pp2.x() - p2.x() ) > 1e-12 || std::fabs( pp2.y() - p2.y() ) > 1e-12 )
+      // direct problem must invert the inverse problem (geographic source CRS on the same datum only, |flattening| <= 1/50)
+      if ( !mSourceCrs.isGeographic() || !( std::fabs( 1.0 - mSemiMinor / mSemiMajor ) <= 0.02 ) || std::fabs( pp1.x() - p1.x() ) > 1e-12 || std::fabs( pp1.y() - p1.y() ) > 1e-12 || std::fabs( pp2.x() - p2.x() ) > 1e-12 || std::fabs( pp2.y() - p2.y() ) > 1e-12 )
         return;
       if ( !( distance > 0 ) || distance > 2.0 * M_PI * mSemiMajor / 3.0 || !std::isfinite( bearing ) )
         return;

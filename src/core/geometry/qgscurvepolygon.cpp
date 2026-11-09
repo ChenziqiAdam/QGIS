@@ -527,10 +527,10 @@ double QgsCurvePolygon::area() const
     if ( !( p > 0 ) || !std::isfinite( p ) || !std::isfinite( totalArea ) )
       return;
     const double a = QgsSanitizer::seen( "QG-GEO-005", totalArea );
-    // slack: area and perimeter carry coordinate rounding eps |coordinate| per vertex (random walk over the vertices)
+    // slack: the area sums products of absolute coordinates (rounding eps coordinate^2 per vertex), the perimeter eps coordinate
     const QgsRectangle eb = mExteriorRing->boundingBox();
     const double coordMax = std::max( { std::fabs( eb.xMinimum() ), std::fabs( eb.xMaximum() ), std::fabs( eb.yMinimum() ), std::fabs( eb.yMaximum() ) } );
-    const double slack = 64 * QgsSanitizer::EPS * std::sqrt( static_cast<double>( mExteriorRing->numPoints() ) ) * coordMax * p;
+    const double slack = 64 * QgsSanitizer::EPS * static_cast<double>( mExteriorRing->numPoints() ) * coordMax * ( coordMax + p );
     QgsSanitizer::check( "QG-GEO-005", a > p * p / ( 4.0 * M_PI ) * ( 1 + 1e-9 ) + slack, "area " + QgsSanitizer::num( a ) + " exceeds P^2/4pi with P=" + QgsSanitizer::num( p ) );
   } );
   return totalArea;
