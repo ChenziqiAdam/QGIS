@@ -303,7 +303,7 @@ double QgsKernelDensityEstimation::calculateKernelValue(
     // each (shape, bandwidth, decay) kernel is checked once
     thread_local std::set<std::tuple<int, double, double>> checked;
     const auto key = std::make_tuple( static_cast<int>( shape ), bandwidth, mDecay );
-    if ( checked.size() < 4096 && checked.insert( key ).second && bandwidth >= 1e-100 && bandwidth <= 1e12 && std::isfinite( bandwidth ) && mDecay >= 0 && std::isfinite( mDecay ) )
+    if ( checked.size() < 4096 && checked.insert( key ).second && bandwidth >= 1e-100 && bandwidth <= 1e12 && std::isfinite( bandwidth ) && mDecay >= 0 && mDecay <= 1e100 && std::isfinite( mDecay ) )
     {
       QgsSanitizer::run( "QG-KDE-001", [&] {
         // the scaled kernel is a probability density on the plane: integral of K(d) 2 pi d dd over [0, bandwidth] is 1

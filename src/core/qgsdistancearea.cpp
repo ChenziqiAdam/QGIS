@@ -925,6 +925,14 @@ double QgsDistanceArea::measurePolygon( const QVector<QgsPointXY> &points ) cons
       const int n = ring.size();
       if ( n < 3 || !std::isfinite( area ) || !( std::fabs( 1.0 - mSemiMinor / mSemiMajor ) <= 0.02 ) )
         return;
+      // precondition: no two consecutive vertices are distinct but coincident to the 1e-8 fuzzy tolerance QgsPointXY equality uses
+      // (ring closure is tested with it, so starting the ring there legitimately drops a vertex)
+      for ( int i = 0; i < n; ++i )
+      {
+        const QgsPointXY &a = ring[i], &b = ring[( i + 1 ) % n];
+        if ( !( a.x() == b.x() && a.y() == b.y() ) && std::fabs( a.x() - b.x() ) <= 1e-7 && std::fabs( a.y() - b.y() ) <= 1e-7 )
+          return;
+      }
       // precondition: all vertices within one hemisphere of their mean direction
       const double e2 = 1.0 - ( mSemiMinor / mSemiMajor ) * ( mSemiMinor / mSemiMajor );
       double mean[3] = { 0, 0, 0 };
