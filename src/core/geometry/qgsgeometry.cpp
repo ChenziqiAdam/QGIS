@@ -2971,7 +2971,7 @@ QgsGeometry QgsGeometry::centroid() const
 
   QgsSanitizer::run( "QG-GEO-004", [&] {
     const QgsMultiPolygon *mp = qgsgeometry_cast<const QgsMultiPolygon *>( d->geometry.get() );
-    if ( !mp || mp->numGeometries() < 2 || mp->numGeometries() > 20 || result.isNull() || result.isEmpty() || QgsWkbTypes::flatType( result.wkbType() ) != Qgis::WkbType::Point )
+    if ( !mp || mp->hasCurvedSegments() || mp->numGeometries() < 2 || mp->numGeometries() > 20 || result.isNull() || result.isEmpty() || QgsWkbTypes::flatType( result.wkbType() ) != Qgis::WkbType::Point )
       return;
     std::vector<QgsGeometry> parts;
     double minPartArea = std::numeric_limits<double>::max();

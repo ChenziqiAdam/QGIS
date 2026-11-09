@@ -3,7 +3,7 @@
   "upstream": "qgis/qgis",
   "upstream_tag": "final-4_2_3",
   "upstream_commit": "b041a18904a4dc9fdada8ecb2c84385054ddfee1",
-  "instrumented_commit": "085bf97f45a14581edc1d7023b8117af7282fee0",
+  "instrumented_commit": "29f402e419ad268bfa68704565afe9b0b75e2bd9",
   "sanitizers": [
     {
       "id": "QG-DST-001",
@@ -103,7 +103,7 @@
       "source": "src/core/geometry/qgscurvepolygon.cpp",
       "symbol": "QgsCurvePolygon::area",
       "scientific_quantity": "planar polygon area",
-      "precondition": "polygon with finite coordinates of at least 3 vertices in the exterior ring",
+      "precondition": "polygon whose exterior ring is a linear ring (line string; shifting a circular-arc ring changes the geometry) with finite coordinates and at least 3 vertices",
       "invariant": "polygon area does not depend on the ring's starting vertex or orientation",
       "observation_point": "end of area(), re-evaluated on the exterior ring cyclically shifted by n/2 and reversed",
       "alarm": "difference > 16 n eps sum_i (abs(x_i y_{i+1} - x_{i+1} y_i) + abs(x_i) abs(dy_i) + abs(y_i) abs(dx_i))",
@@ -116,7 +116,7 @@
       "source": "src/core/geometry/qgsgeometry.cpp",
       "symbol": "QgsGeometry::centroid",
       "scientific_quantity": "centroid of a multi-part polygon",
-      "precondition": "multipolygon of 2 to 20 valid, mutually disjoint parts, each with area >= 1e-2 of its bounding box (no slivers: the rounding of a centroid scales with extent^2 / area)",
+      "precondition": "multipolygon of straight-segment parts only (curved parts are centroided on their linearisation while area() is exact), 2 to 20 valid, mutually disjoint parts, each with area >= 1e-2 of its bounding box (no slivers: the rounding of a centroid scales with extent^2 / area)",
       "invariant": "the centroid is the area-weighted mean of the part centroids",
       "observation_point": "end of centroid(); parts re-evaluated individually through the same API",
       "alarm": "norm(c - sum_i A_i c_i / sum_i A_i) > 1e-9 extent + 64 eps (|c| + extent + max|coord| extent^2 / A_min)",
@@ -194,10 +194,10 @@
       "source": "src/core/qgsstatisticalsummary.cpp",
       "symbol": "QgsStatisticalSummary::finalize",
       "scientific_quantity": "summary statistics",
-      "precondition": "n >= 2 finite values with 0 < max|x| <= 1e150; shift c with abs(c) <= 10 max|x| and mean^2/variance <= 1e4 for x and x + c",
+      "precondition": "n >= 2 finite values with 0 < max|x| <= 1e150; shift c = max|x| and mean^2/variance <= 1e4 for x and x + c",
       "invariant": "the summary does not depend on input order, mean and quantiles shift by c, variance and range do not change",
       "observation_point": "end of finalize(), on a private summary fed the reversed list and the shifted list",
-      "alarm": "median/quartiles/range differ by more than 8 eps max|x + c|; mean by more than 8 n eps max|x + c|; variance by more than 64 n eps (var + mean^2/1e4)",
+      "alarm": "median/quartiles/range differ by more than 8 eps (max|x| + |c|); mean by more than 8 n eps (max|x| + |c|); variance by more than 64 n eps (var + mean^2/1e4)",
       "rationale": "reported statistics are properties of the sample, not of its ordering or origin"
     },
     {
@@ -301,7 +301,7 @@
       "precondition": "linear interpolation method; the cached vertices are coplanar to 64 eps max(|z|, extent); query inside the hull; tolerance 1e3 eps scale (1 + max|coord| / extent), the factor covering cancellation at large absolute coordinates",
       "invariant": "a piecewise-linear interpolant reproduces a plane exactly",
       "observation_point": "before returning from interpolatePoint",
-      "alarm": "abs(v - (a x + b y + c)) > 1e3 eps (max|z| + |a| extent + |b| extent)",
+      "alarm": "abs(v - (a x + b y + c)) > 1e3 eps (max|z| + (|a| + |b|)(max|coord| + extent)) (1 + max|coord| / extent)",
       "rationale": "TIN surfaces of planar terrain must be planar"
     },
     {
@@ -379,7 +379,7 @@
       "precondition": "source and destination are geographic or projected CRS (longitude compared modulo 360 degrees; Cassini-Soldner excluded: it folds beyond 90 degrees from the central meridian although its declared area of use is the world), operation without a grid shift missing, point inside both areas of use and 1 degree away from a projection singularity, not ballpark",
       "invariant": "forward then reverse transformation returns the original coordinates",
       "observation_point": "end of transform(), on a private reverse transform",
-      "alarm": "distance(p, T^-1 T p) > 5e-2 m (metres, or degrees converted at the point's latitude); 5 cm is the second-order error bound theta^2 R of small-angle datum-shift operations (theta <= 5e-5 rad)",
+      "alarm": "distance(p, T^-1 T p) > 5e-2 m (metres, or degrees converted at the point's latitude); 5 cm bounds the datum-shift round trip (second-order small-angle terms theta^2 R, theta <= 5e-5 rad, plus the reverse operation starting from height zero, 1.9 cm observed for a pure translation); the same coordinate operation must serve both directions",
       "rationale": "a layer reprojected twice must return to its source coordinates"
     },
     {
