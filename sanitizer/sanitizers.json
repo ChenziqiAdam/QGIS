@@ -3,7 +3,7 @@
   "upstream": "qgis/qgis",
   "upstream_tag": "final-4_2_3",
   "upstream_commit": "b041a18904a4dc9fdada8ecb2c84385054ddfee1",
-  "instrumented_commit": "a216658b595b67fb470ba3ec8388edc187c1f1b3",
+  "instrumented_commit": "09b9cc2a341a373925e020edd328f2c19eea16c4",
   "sanitizers": [
     {
       "id": "QG-DST-001",
@@ -51,7 +51,7 @@
       "source": "src/core/qgsdistancearea.cpp",
       "symbol": "QgsDistanceArea::measurePolygon(points)",
       "scientific_quantity": "ellipsoidal polygon area",
-      "precondition": "ellipsoid set with abs(flattening) <= 1/50; ring of at least 3 distinct vertices, closed or open, without self-intersection and spanning less than a hemisphere",
+      "precondition": "ellipsoid set with abs(flattening) <= 1/50; ring of at least 3 distinct vertices, closed or open, without self-intersection and spanning less than a hemisphere, no two consecutive vertices distinct but within 1e-7 degrees (QgsPointXY equality is fuzzy at 1e-8 and decides ring closure)",
       "invariant": "the enclosed area does not depend on where the ring starts or on its orientation",
       "observation_point": "end of measurePolygon, re-called with the ring cyclically shifted by n/2 and with the ring reversed",
       "alarm": "either variant differs by more than 64 eps a^2 + 1e-9 A (a = semi-major axis; accumulation is at geodesic-solver precision)",
@@ -324,7 +324,7 @@
       "source": "src/analysis/raster/qgskde.cpp",
       "symbol": "QgsKernelDensityEstimation::calculateKernelValue",
       "scientific_quantity": "kernel density kernel",
-      "precondition": "Scaled output values, any shape, any bandwidth in [1e-100, 1e12] (below that the normalisation overflows), triangular decay >= 0",
+      "precondition": "Scaled output values, any shape, any bandwidth in [1e-100, 1e12] (below that the normalisation overflows), triangular decay in [0, 1e100] (1 + 2 decay overflows near 1e308)",
       "invariant": "the kernel is a probability density on the plane: integral of K(d) 2 pi d dd over [0, bandwidth] equals 1 (independent 64-node Gauss-Legendre quadrature in d)",
       "observation_point": "first call for each (shape, bandwidth, decay), cached per triple",
       "alarm": "abs(integral - 1) > 1e-9",
@@ -350,10 +350,10 @@
       "source": "src/core/proj/qgscoordinatetransform.cpp",
       "symbol": "QgsCoordinateTransform::transform",
       "scientific_quantity": "coordinate transformation",
-      "precondition": "source and destination are geographic or projected CRS (longitude compared modulo 360 degrees; Cassini-Soldner excluded: it folds beyond 90 degrees from the central meridian although its declared area of use is the world), operation without a grid shift missing, point inside both areas of use and 1 degree away from a projection singularity, not ballpark",
+      "precondition": "source and destination are geographic or projected CRS (longitude compared modulo 360 degrees; Cassini-Soldner excluded: it folds beyond 90 degrees from the central meridian although its declared area of use is the world), operation without a grid shift missing, point inside both areas of use and 1 degree away from a projection singularity, not ballpark, and both CRS on the Greenwich prime meridian",
       "invariant": "forward then reverse transformation returns the original coordinates",
       "observation_point": "end of transform(), on a private reverse transform",
-      "alarm": "distance(p, T^-1 T p) > 5e-2 m (metres, or degrees converted at the point's latitude); 5 cm bounds the datum-shift round trip (second-order small-angle terms theta^2 R, theta <= 5e-5 rad, plus the reverse operation starting from height zero, 1.9 cm observed for a pure translation); the same coordinate operation must serve both directions",
+      "alarm": "distance(p, T^-1 T p) > 5e-3 m + 64 delta^2 / R (metres, or degrees converted at the point's latitude; delta = size of the datum shift, the distance between p and T p each expressed on its own datum; R = 6.4e6 m). Error model: the inverse of a Helmert/Molodensky form is exact only to second order, k delta^2/R, measured k <= 17.2 over about 8000 random points of EPSG geographic CRS pairs without grids (64 leaves a margin of 3.7)",
       "rationale": "a layer reprojected twice must return to its source coordinates"
     },
     {
