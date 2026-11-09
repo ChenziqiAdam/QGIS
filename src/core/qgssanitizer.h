@@ -73,7 +73,11 @@ namespace QgsSanitizer
   inline void alarm( const char *id, const std::string &detail )
   {
     if ( const char *p = logPath() )
-      append( p, std::string( "{\"id\":\"" ) + id + "\",\"detail\":\"" + esc( detail ) + "\"}" );
+    {
+      // optional per-run key set by the evaluator: records without it mark a tampered log
+      static const char *key = std::getenv( "QGIS_SANITIZE_KEY" );
+      append( p, std::string( "{\"id\":\"" ) + id + "\"," + ( key && *key ? std::string( "\"key\":\"" ) + esc( key ) + "\"," : std::string() ) + "\"detail\":\"" + esc( detail ) + "\"}" );
+    }
   }
 
   inline std::string num( double v )
